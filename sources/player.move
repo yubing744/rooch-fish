@@ -2,7 +2,7 @@ module rooch_fish::player {
     use moveos_std::table::{Self, Table};
     use std::option::{Self, Option};
 
-    friend rooch_fish::main;
+    friend rooch_fish::rooch_fish;
 
     /// Error codes
     const E_OVERFLOW: u64 = 1001;

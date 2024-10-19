@@ -2,7 +2,7 @@ module rooch_fish::fish {
     use moveos_std::signer;
     use moveos_std::object::{Self, Object};
 
-    friend rooch_fish::main;
+    friend rooch_fish::rooch_fish;
     friend rooch_fish::pond;
 
     /// Error codes
@@ -40,7 +40,7 @@ module rooch_fish::fish {
     /// @param account: The signer of the transaction
     /// @param fish_obj: The fish object to move
     /// @param direction: The direction to move (0: Up, 1: Right, 2: Down, 3: Left)
-    public fun move_fish(account: &signer, fish_obj: &mut Object<Fish>, direction: u8) {
+    public(friend) fun move_fish(account: &signer, fish_obj: &mut Object<Fish>, direction: u8) {
         let fish = object::borrow_mut(fish_obj);
         assert!(signer::address_of(account) == fish.owner, E_NOT_OWNER);
         assert!(direction <= 3, E_INVALID_DIRECTION);
@@ -64,6 +64,12 @@ module rooch_fish::fish {
         fish.size = fish.size + amount;
     }
 
+    /// Destroys a fish object.
+    /// @param fish_obj: The fish object to destroy
+    public(friend) fun drop_fish(fish_obj: Object<Fish>) {
+        let Fish { id: _, owner: _, size: _, x: _, y: _ } = object::remove(fish_obj);
+    }
+
     /// Retrieves the fish's information.
     /// @param fish_obj: The fish object to get information from
     /// @return A tuple containing the fish's id, owner, size, x, and y
@@ -77,12 +83,6 @@ module rooch_fish::fish {
     /// @return The id of the fish
     public fun get_id(fish_obj: &Object<Fish>): u64 {
         object::borrow(fish_obj).id
-    }
-
-    /// Destroys a fish object.
-    /// @param fish_obj: The fish object to destroy
-    public fun drop_fish(fish_obj: Object<Fish>) {
-        let Fish { id: _, owner: _, size: _, x: _, y: _ } = object::remove(fish_obj);
     }
 
     #[test]
