@@ -4,10 +4,15 @@
 module rooch_fish::rooch_fish {
     use std::vector;
     use moveos_std::object::{Self, Object};
+    use moveos_std::account;
     use moveos_std::signer;
     use moveos_std::event;
     use moveos_std::table::{Self, Table};
-    use rooch_framework::gas_coin;
+
+    use rooch_framework::account_coin_store;
+    use rooch_framework::coin_store::{Self, CoinStore};
+    use rooch_framework::gas_coin::{Self, RGas};
+
     use rooch_fish::fish::{Self, Fish};
     use rooch_fish::food::{Self, Food};
     use rooch_fish::pond::{Self, PondState};
@@ -23,44 +28,50 @@ module rooch_fish::rooch_fish {
         id: u64,
         width: u64,
         height: u64,
-        purchase_amount: u64,
+        purchase_amount: u256,
+        next_fish_id: u64,
+    }
+
+    struct Treasury has key, store {
+        coin_store: Object<CoinStore<RGas>>
     }
 
     struct GameState has key {
         ponds: Table<u64, Object<PondState>>,
         player_list: PlayerList,
         pond_infos: vector<PondInfo>,
+        treasury: Treasury,
     }
 
-    struct FishPurchasedEvent has drop, store {
+    struct FishPurchasedEvent has copy, drop, store {
         pond_id: u64,
         fish_id: u64,
         owner: address,
     }
 
-    struct FishMovedEvent has drop, store {
+    struct FishMovedEvent has copy, drop, store {
         fish_id: u64,
         new_x: u64,
         new_y: u64,
     }
 
-    struct FishDestroyedEvent has drop, store {
+    struct FishDestroyedEvent has copy, drop, store {
         fish_id: u64,
         reward: u256,
     }
 
-    public entry fun initialize(ctx: &mut signer) {
-        assert!(signer::address_of(ctx) == @rooch_fish, ERR_UNAUTHORIZED);
+    fun init() {
+        let module_signer = signer::module_signer<GameState>();
 
         let pond_infos = vector::empty<PondInfo>();
-        vector::push_back(&mut pond_infos, PondInfo { id: 0, width: 100, height: 100, purchase_amount: 100 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 1, width: 150, height: 150, purchase_amount: 200 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 2, width: 200, height: 200, purchase_amount: 300 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 3, width: 250, height: 250, purchase_amount: 400 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 4, width: 300, height: 300, purchase_amount: 500 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 5, width: 350, height: 350, purchase_amount: 600 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 6, width: 400, height: 400, purchase_amount: 700 });
-        vector::push_back(&mut pond_infos, PondInfo { id: 7, width: 450, height: 450, purchase_amount: 800 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 0, width: 100, height: 100, purchase_amount: 100, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 1, width: 150, height: 150, purchase_amount: 200, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 2, width: 200, height: 200, purchase_amount: 300, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 3, width: 250, height: 250, purchase_amount: 400, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 4, width: 300, height: 300, purchase_amount: 500, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 5, width: 350, height: 350, purchase_amount: 600, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 6, width: 400, height: 400, purchase_amount: 700, next_fish_id: 1 });
+        vector::push_back(&mut pond_infos, PondInfo { id: 7, width: 450, height: 450, purchase_amount: 800, next_fish_id: 1 });
 
         let ponds = table::new();
         let i = 0;
@@ -73,36 +84,44 @@ module rooch_fish::rooch_fish {
 
         let player_list = player::create_player_list();
 
+        let coin_store_obj = coin_store::create_coin_store<RGas>();
+        let treasury = Treasury { coin_store: coin_store_obj };
+
         let game_state = GameState {
             ponds,
             player_list,
             pond_infos,
+            treasury,
         };
 
-        object::new_named_object(game_state);
+        account::move_resource_to(&module_signer, game_state);
     }
 
-    public entry fun purchase_fish(account: &signer, pond_id: u64) acquires GameState {
-        let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
-        let pond_info = get_pond_info(pond_id);
+
+    public entry fun purchase_fish(account: &signer, pond_id: u64) {
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
+
+        let pond_info = get_pond_info_mut(pond_id);
         let purchase_amount = pond_info.purchase_amount;
 
+        // deduct user RGas coin
         let account_addr = signer::address_of(account);
         assert!(gas_coin::balance(account_addr) >= (purchase_amount as u256), ERR_INSUFFICIENT_BALANCE);
+        let coin = account_coin_store::withdraw(account, purchase_amount);
+        coin_store::deposit(&mut game_state.treasury.coin_store, coin);
 
+        // Give user a fish
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
-        assert!(pond::get_fish_count(object::borrow(pond_obj)) < 100, ERR_POND_FULL);
-
-        gas_coin::deduct_gas(account_addr, (purchase_amount as u256));
-
         let (x, y) = utils::random_position(pond_info.width, pond_info.height);
-        let fish_id = utils::random_u64(1000000);
+        let fish_id = pond_info.next_fish_id;
+        pond_info.next_fish_id = pond_info.next_fish_id + 1;
         let fish = fish::create_fish(account_addr, fish_id, 10, x, y);
         pond::add_fish(object::borrow_mut(pond_obj), fish);
 
         event::emit(FishPurchasedEvent { pond_id, fish_id, owner: account_addr });
     }
 
+    /*
     public entry fun move_fish(account: &signer, fish_id: u64, direction: u8) acquires GameState {
         let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
         let account_addr = signer::address_of(account);
@@ -171,11 +190,7 @@ module rooch_fish::rooch_fish {
         fish::drop_fish(removed_fish);
     }
 
-    fun get_pond_info(pond_id: u64): &PondInfo acquires GameState {
-        let game_state = object::borrow_object<GameState>(@rooch_fish);
-        assert!(pond_id < vector::length(&game_state.pond_infos), ERR_INVALID_POND_ID);
-        vector::borrow(&game_state.pond_infos, pond_id)
-    }
+
 
     fun find_fish(fish_id: u64): (u64, &mut Object<Fish>) acquires GameState {
         let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
@@ -226,5 +241,18 @@ module rooch_fish::rooch_fish {
         let base_reward = (fish::get_size(fish) as u256);
         let pond_info = get_pond_info(pond_id);
         base_reward * (pond_info.purchase_amount as u256) / 100
+    }
+    */
+
+    fun get_pond_info_mut(pond_id: u64): &mut PondInfo {
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
+        assert!(pond_id < vector::length(&game_state.pond_infos), ERR_INVALID_POND_ID);
+        vector::borrow_mut(&mut game_state.pond_infos, pond_id)
+    }
+
+    fun get_pond_info(pond_id: u64): &PondInfo {
+        let game_state = account::borrow_resource<GameState>(@rooch_fish);
+        assert!(pond_id < vector::length(&game_state.pond_infos), ERR_INVALID_POND_ID);
+        vector::borrow(&game_state.pond_infos, pond_id)
     }
 }

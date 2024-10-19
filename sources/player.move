@@ -19,7 +19,7 @@ module rooch_fish::player {
     }
 
     /// Represents the list of all players
-    struct PlayerList has key {
+    struct PlayerList has key, store {
         players: Table<address, PlayerState>,
         total_feed: u64,
         player_count: u64,
