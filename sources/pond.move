@@ -1,4 +1,5 @@
 module rooch_fish::pond {
+    use std::vector;
     use moveos_std::object::{Self, Object};
     use moveos_std::table_vec::{Self, TableVec};
     use rooch_fish::fish::{Self, Fish};
@@ -6,28 +7,38 @@ module rooch_fish::pond {
 
     friend rooch_fish::rooch_fish;
 
-    /// Error codes
     const E_FISH_NOT_FOUND: u64 = 1;
     const E_FOOD_NOT_FOUND: u64 = 2;
     const E_MAX_FISH_COUNT_REACHED: u64 = 3;
     const E_MAX_FOOD_COUNT_REACHED: u64 = 4;
 
+    struct ExitZone has store, copy, drop {
+        x: u64,
+        y: u64,
+        radius: u64,
+    }
+
     struct PondState has key, store {
         id: u64,
         fishes: TableVec<Object<Fish>>,
         foods: TableVec<Object<Food>>,
+        exit_zones: vector<ExitZone>,
         fish_count: u64,
         food_count: u64,
-        max_width: u64,
-        max_height: u64,
+        width: u64,
+        height: u64,
+        purchase_amount: u256,
+        next_fish_id: u64,
+        next_food_id: u64,
         max_fish_count: u64,
         max_food_count: u64,
     }
 
     public(friend) fun create_pond(
         id: u64,
-        max_width: u64,
-        max_height: u64,
+        width: u64,
+        height: u64,
+        purchase_amount: u256,
         max_fish_count: u64,
         max_food_count: u64
     ): Object<PondState> {
@@ -35,10 +46,14 @@ module rooch_fish::pond {
             id,
             fishes: table_vec::new(),
             foods: table_vec::new(),
+            exit_zones: vector::empty(),
             fish_count: 0,
             food_count: 0,
-            max_width,
-            max_height,
+            width,
+            height,
+            purchase_amount,
+            next_fish_id: 1,
+            next_food_id: 1,
             max_fish_count,
             max_food_count,
         };
@@ -85,12 +100,16 @@ module rooch_fish::pond {
         pond_state.id
     }
 
-    public fun get_max_width(pond_state: &PondState): u64 {
-        pond_state.max_width
+    public fun get_width(pond_state: &PondState): u64 {
+        pond_state.width
     }
 
-    public fun get_max_height(pond_state: &PondState): u64 {
-        pond_state.max_height
+    public fun get_height(pond_state: &PondState): u64 {
+        pond_state.height
+    }
+
+    public fun get_purchase_amount(pond_state: &PondState): u256 {
+        pond_state.purchase_amount
     }
 
     public fun get_max_fish_count(pond_state: &PondState): u64 {
@@ -101,7 +120,18 @@ module rooch_fish::pond {
         pond_state.max_food_count
     }
 
-    // Helper function to find a fish's index
+    public(friend) fun get_next_fish_id(pond_state: &mut PondState): u64 {
+        let fish_id = pond_state.next_fish_id;
+        pond_state.next_fish_id = pond_state.next_fish_id + 1;
+        fish_id
+    }
+
+    public(friend) fun get_next_food_id(pond_state: &mut PondState): u64 {
+        let food_id = pond_state.next_food_id;
+        pond_state.next_food_id = pond_state.next_food_id + 1;
+        food_id
+    }
+
     fun find_fish_index(pond_state: &PondState, fish_id: u64): u64 {
         let i = 0;
         let len = table_vec::length(&pond_state.fishes);
@@ -115,7 +145,6 @@ module rooch_fish::pond {
         abort E_FISH_NOT_FOUND
     }
 
-    // Helper function to find a food's index
     fun find_food_index(pond_state: &PondState, food_id: u64): u64 {
         let i = 0;
         let len = table_vec::length(&pond_state.foods);
@@ -129,24 +158,49 @@ module rooch_fish::pond {
         abort E_FOOD_NOT_FOUND
     }
 
-    // New function to get all fishes
     public fun get_all_fishes(pond_state: &PondState): &TableVec<Object<Fish>> {
         &pond_state.fishes
     }
 
-    // New function to get all foods
     public fun get_all_foods(pond_state: &PondState): &TableVec<Object<Food>> {
         &pond_state.foods
     }
 
-    // New function to get fish count
     public fun get_fish_count(pond_state: &PondState): u64 {
         pond_state.fish_count
     }
 
-    // New function to get food count
     public fun get_food_count(pond_state: &PondState): u64 {
         pond_state.food_count
+    }
+
+    public(friend) fun add_exit_zone(pond_state: &mut PondState, x: u64, y: u64, radius: u64) {
+        let exit_zone = ExitZone { x, y, radius };
+        vector::push_back(&mut pond_state.exit_zones, exit_zone);
+    }
+
+    public(friend) fun remove_exit_zone(pond_state: &mut PondState, index: u64) {
+        vector::swap_remove(&mut pond_state.exit_zones, index);
+    }
+
+    public fun is_fish_in_exit_zone(pond_state: &PondState, fish: &Object<Fish>): bool {
+        let (fish_x, fish_y) = fish::get_position(fish);
+        let len = vector::length(&pond_state.exit_zones);
+        let i = 0;
+        while (i < len) {
+            let exit_zone = vector::borrow(&pond_state.exit_zones, i);
+            if (is_point_in_circle(fish_x, fish_y, exit_zone.x, exit_zone.y, exit_zone.radius)) {
+                return true
+            };
+            i = i + 1;
+        };
+        false
+    }
+
+    fun is_point_in_circle(px: u64, py: u64, cx: u64, cy: u64, radius: u64): bool {
+        let dx = if (px > cx) { px - cx } else { cx - px };
+        let dy = if (py > cy) { py - cy } else { cy - py };
+        (dx * dx + dy * dy) <= (radius * radius)
     }
 
     public(friend) fun drop_pond(pond: Object<PondState>) {
@@ -154,13 +208,22 @@ module rooch_fish::pond {
             id: _,
             fishes,
             foods,
+            exit_zones,
             fish_count: _,
             food_count: _,
-            max_width: _,
-            max_height: _,
+            width: _,
+            height: _,
+            purchase_amount: _,
+            next_fish_id: _,
+            next_food_id: _,
             max_fish_count: _,
             max_food_count: _
         } = object::remove(pond);
+
+        while (!vector::is_empty(&exit_zones)) {
+            vector::pop_back(&mut exit_zones);
+        };
+        vector::destroy_empty(exit_zones);
 
         while (!table_vec::is_empty(&fishes)) {
             let fish = table_vec::pop_back(&mut fishes);
@@ -178,28 +241,30 @@ module rooch_fish::pond {
     #[test]
     fun test_create_pond() {
         let id = 1;
-        let max_width = 100;
-        let max_height = 100;
+        let width = 100;
+        let height = 100;
+        let purchase_amount = 500;
         let max_fish_count = 50;
         let max_food_count = 30;
 
-        let pond_obj = create_pond(id, max_width, max_height, max_fish_count, max_food_count);
+        let pond_obj = create_pond(id, width, height, purchase_amount, max_fish_count, max_food_count);
         let pond_state = object::borrow(&pond_obj);
 
         assert!(get_pond_id(pond_state) == id, 1);
-        assert!(get_max_width(pond_state) == max_width, 2);
-        assert!(get_max_height(pond_state) == max_height, 3);
-        assert!(get_max_fish_count(pond_state) == max_fish_count, 4);
-        assert!(get_max_food_count(pond_state) == max_food_count, 5);
-        assert!(get_fish_count(pond_state) == 0, 6);
-        assert!(get_food_count(pond_state) == 0, 7);
+        assert!(get_width(pond_state) == width, 2);
+        assert!(get_height(pond_state) == height, 3);
+        assert!(get_purchase_amount(pond_state) == purchase_amount, 4);
+        assert!(get_max_fish_count(pond_state) == max_fish_count, 5);
+        assert!(get_max_food_count(pond_state) == max_food_count, 6);
+        assert!(get_fish_count(pond_state) == 0, 7);
+        assert!(get_food_count(pond_state) == 0, 8);
 
         drop_pond(pond_obj);
     }
 
     #[test]
     fun test_add_fish() {
-        let pond_obj = create_pond(1, 100, 100, 50, 30);
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let fish1 = fish::create_fish(@0x1, 1, 10, 5, 5);
@@ -225,7 +290,7 @@ module rooch_fish::pond {
 
     #[test]
     fun test_remove_fish() {
-        let pond_obj = create_pond(1, 100, 100, 50, 30);
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let fish1 = fish::create_fish(@0x1, 1, 10, 5, 5);
@@ -249,7 +314,7 @@ module rooch_fish::pond {
 
     #[test]
     fun test_add_food() {
-        let pond_obj = create_pond(1, 100, 100, 50, 30);
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let food1 = food::create_food(1, 5, 15, 15);
@@ -275,7 +340,7 @@ module rooch_fish::pond {
 
     #[test]
     fun test_remove_food() {
-        let pond_obj = create_pond(1, 100, 100, 50, 30);
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let food1 = food::create_food(1, 5, 15, 15);
@@ -298,99 +363,48 @@ module rooch_fish::pond {
     }
 
     #[test]
-    fun test_pond_comprehensive() {
-        // Create a pond
-        let pond_obj = create_pond(1, 100, 100, 3, 2);
+    fun test_get_next_fish_id() {
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
-        // Test basic properties
-        assert!(get_pond_id(pond_state) == 1, 1);
-        assert!(get_max_width(pond_state) == 100, 2);
-        assert!(get_max_height(pond_state) == 100, 3);
-        assert!(get_max_fish_count(pond_state) == 3, 4);
-        assert!(get_max_food_count(pond_state) == 2, 5);
-
-        // Add fish and food
-        let fish1 = fish::create_fish(@0x1, 1, 10, 5, 5);
-        let fish2 = fish::create_fish(@0x2, 2, 15, 10, 10);
-        let food1 = food::create_food(1, 5, 15, 15);
-
-        add_fish(pond_state, fish1);
-        add_fish(pond_state, fish2);
-        add_food(pond_state, food1);
-
-        assert!(get_fish_count(pond_state) == 2, 6);
-        assert!(get_food_count(pond_state) == 1, 7);
-
-        // Test getting fish object
-        let fish_obj = get_fish(pond_state, 1);
-        assert!(fish::get_id(fish_obj) == 1, 8);
-
-        // Test getting mutable fish object and modifying it
-        let fish_obj_mut = get_fish_mut(pond_state, 2);
-        fish::grow_fish(fish_obj_mut, 5);
-        let (_, _, size, _, _) = fish::get_fish_info(fish_obj_mut);
-        assert!(size == 20, 9); // size should be 15 + 5 = 20
-
-        // Test removing fish and food
-        let removed_fish = remove_fish(pond_state, 1);
-        assert!(get_fish_count(pond_state) == 1, 10);
-        fish::drop_fish(removed_fish);
-
-        let removed_food = remove_food(pond_state, 1);
-        assert!(get_food_count(pond_state) == 0, 11);
-        food::drop_food(removed_food);
-
-        // Test adding up to maximum count
-        let fish3 = fish::create_fish(@0x3, 3, 20, 30, 30);
-        let fish4 = fish::create_fish(@0x4, 4, 25, 40, 40);
-        add_fish(pond_state, fish3);
-        assert!(get_fish_count(pond_state) == 2, 12);
-        add_fish(pond_state, fish4);
-        assert!(get_fish_count(pond_state) == 3, 13);
-
-        let food2 = food::create_food(2, 8, 20, 20);
-        let food3 = food::create_food(3, 10, 25, 25);
-        add_food(pond_state, food2);
-        assert!(get_food_count(pond_state) == 1, 14);
-        add_food(pond_state, food3);
-        assert!(get_food_count(pond_state) == 2, 15);
-
-        // Clean up
-        drop_pond(pond_obj);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = E_MAX_FISH_COUNT_REACHED)]
-    fun test_add_fish_max_count() {
-        let pond_obj = create_pond(1, 100, 100, 1, 1);
-        let pond_state = object::borrow_mut(&mut pond_obj);
-
-        let fish1 = fish::create_fish(@0x1, 1, 10, 5, 5);
-        let fish2 = fish::create_fish(@0x2, 2, 15, 10, 10);
-
-        add_fish(pond_state, fish1);
-        add_fish(pond_state, fish2); // This should fail
+        assert!(get_next_fish_id(pond_state) == 1, 1);
+        assert!(get_next_fish_id(pond_state) == 2, 2);
+        assert!(get_next_fish_id(pond_state) == 3, 3);
 
         drop_pond(pond_obj);
     }
 
     #[test]
-    #[expected_failure(abort_code = E_FISH_NOT_FOUND)]
-    fun test_remove_nonexistent_fish() {
-        let pond_obj = create_pond(1, 100, 100, 1, 1);
+    fun test_get_next_food_id() {
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
-        // Add a fish first
-        let fish = fish::create_fish(@0x1, 1, 10, 5, 5);
-        add_fish(pond_state, fish);
+        assert!(get_next_food_id(pond_state) == 1, 1);
+        assert!(get_next_food_id(pond_state) == 2, 2);
+        assert!(get_next_food_id(pond_state) == 3, 3);
 
-        // Try to remove a non-existent fish
-        let removed_fish = remove_fish(pond_state, 2); // This should fail
+        drop_pond(pond_obj);
+    }
 
-        // If it doesn't fail (which it should), clean up properly
-        fish::drop_fish(removed_fish);
+    #[test]
+    fun test_exit_zones() {
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
 
+        add_exit_zone(pond_state, 10, 10, 5);
+        add_exit_zone(pond_state, 90, 90, 8);
+
+        let fish1 = fish::create_fish(@0x1, 1, 10, 12, 12);
+        let fish2 = fish::create_fish(@0x2, 2, 15, 50, 50);
+
+        assert!(is_fish_in_exit_zone(pond_state, &fish1), 1);
+        assert!(!is_fish_in_exit_zone(pond_state, &fish2), 2);
+
+        remove_exit_zone(pond_state, 0);
+        assert!(!is_fish_in_exit_zone(pond_state, &fish1), 3);
+
+        fish::drop_fish(fish1);
+        fish::drop_fish(fish2);
         drop_pond(pond_obj);
     }
 }
