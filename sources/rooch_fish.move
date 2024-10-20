@@ -8,6 +8,7 @@ module rooch_fish::rooch_fish {
     use moveos_std::signer;
     use moveos_std::event;
     use moveos_std::table::{Self, Table};
+    use moveos_std::table_vec::{Self, TableVec};
 
     use rooch_framework::account_coin_store;
     use rooch_framework::coin_store::{Self, CoinStore};
@@ -121,12 +122,12 @@ module rooch_fish::rooch_fish {
         event::emit(FishPurchasedEvent { pond_id, fish_id, owner: account_addr });
     }
 
-    /*
-    public entry fun move_fish(account: &signer, fish_id: u64, direction: u8) acquires GameState {
-        let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
+
+    public entry fun move_fish(account: &signer, pond_id: u64, fish_id: u64, direction: u8) {
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
         let account_addr = signer::address_of(account);
 
-        let (pond_id, fish) = find_fish(fish_id);
+        let fish = find_fish_mut(pond_id, fish_id);
         assert!(fish::get_owner(fish) == account_addr, ERR_UNAUTHORIZED);
 
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
@@ -140,15 +141,15 @@ module rooch_fish::rooch_fish {
         let new_y = utils::clamp(new_y, 0, pond_info.height);
 
         if (new_x != old_x || new_y != old_y) {
-            fish::set_position(fish, new_x, new_y);
             handle_collisions(pond_obj, fish);
         };
 
         event::emit(FishMovedEvent { fish_id, new_x, new_y });
     }
 
+    /*
     public entry fun feed_food(account: &signer, pond_id: u64, amount: u64) acquires GameState {
-        let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
         let account_addr = signer::address_of(account);
         assert!(gas_coin::balance(account_addr) >= (amount as u256), ERR_INSUFFICIENT_BALANCE);
 
@@ -171,7 +172,7 @@ module rooch_fish::rooch_fish {
     }
 
     public entry fun destroy_fish(account: &signer, fish_id: u64) acquires GameState {
-        let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
         let account_addr = signer::address_of(account);
 
         let (pond_id, fish) = find_fish(fish_id);
@@ -189,51 +190,54 @@ module rooch_fish::rooch_fish {
 
         fish::drop_fish(removed_fish);
     }
-
-
-
-    fun find_fish(fish_id: u64): (u64, &mut Object<Fish>) acquires GameState {
-        let game_state = object::borrow_mut_object<GameState>(@rooch_fish);
-        let i = 0;
-        while (i < 8) {
-            let pond_obj = table::borrow_mut(&mut game_state.ponds, i);
-            if (pond::fish_exists(object::borrow(pond_obj), fish_id)) {
-                return (i, pond::get_fish_mut(object::borrow_mut(pond_obj), fish_id))
-            };
-            i = i + 1;
-        };
-        abort ERR_INVALID_POND_ID
-    }
+    */
 
     fun handle_collisions(pond: &mut Object<PondState>, fish: &mut Object<Fish>) {
         let fish_size = fish::get_size(fish);
         let (fish_x, fish_y) = fish::get_position(fish);
 
+        handle_food_collisions(pond, fish, fish_size, fish_x, fish_y);
+        handle_fish_collisions(pond, fish, fish_size, fish_x, fish_y);
+    }
+
+    fun handle_food_collisions(pond: &mut Object<PondState>, fish: &mut Object<Fish>, fish_size: u64, fish_x: u64, fish_y: u64) {
         let foods = pond::get_all_foods(object::borrow(pond));
+        let pond_mut = object::borrow_mut(pond);
+        
         let i = 0;
-        while (i < vector::length(foods)) {
-            let food = vector::borrow(foods, i);
+        while (i < table_vec::length(foods)) {
+            let food = table_vec::borrow(foods, i);
             let (food_x, food_y) = food::get_position(food);
             if (utils::calculate_distance(fish_x, fish_y, food_x, food_y) <= fish_size) {
                 fish::grow_fish(fish, food::get_size(food));
-                pond::remove_food(object::borrow_mut(pond), food::get_id(food));
+                let food_obj = pond::remove_food(pond_mut, food::get_id(food));
+                food::drop_food(food_obj);
+            } else {
+                i = i + 1;
             };
-            i = i + 1;
         };
+    }
 
+    fun handle_fish_collisions(pond: &mut Object<PondState>, fish: &mut Object<Fish>, fish_size: u64, fish_x: u64, fish_y: u64) {
         let fishes = pond::get_all_fishes(object::borrow(pond));
+        let pond_mut = object::borrow_mut(pond);
+        
         let j = 0;
-        while (j < vector::length(fishes)) {
-            let other_fish = vector::borrow(fishes, j);
+        while (j < table_vec::length(fishes)) {
+            let other_fish = table_vec::borrow(fishes, j);
             if (fish::get_id(fish) != fish::get_id(other_fish)) {
                 let (other_x, other_y) = fish::get_position(other_fish);
                 let other_size = fish::get_size(other_fish);
                 if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
                     fish::grow_fish(fish, other_size / 2);
-                    pond::remove_fish(object::borrow_mut(pond), fish::get_id(other_fish));
+                    let fish_obj = pond::remove_fish(pond_mut, fish::get_id(other_fish));
+                    fish::drop_fish(fish_obj);
+                } else {
+                    j = j + 1;
                 };
+            } else {
+                j = j + 1;
             };
-            j = j + 1;
         };
     }
 
@@ -242,7 +246,12 @@ module rooch_fish::rooch_fish {
         let pond_info = get_pond_info(pond_id);
         base_reward * (pond_info.purchase_amount as u256) / 100
     }
-    */
+ 
+    fun find_fish_mut(pond_id: u64, fish_id: u64): &mut Object<Fish> {
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
+        let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
+        pond::get_fish_mut(object::borrow_mut(pond_obj), fish_id)
+    }
 
     fun get_pond_info_mut(pond_id: u64): &mut PondInfo {
         let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);

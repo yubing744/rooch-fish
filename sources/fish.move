@@ -85,6 +85,42 @@ module rooch_fish::fish {
         object::borrow(fish_obj).id
     }
 
+    /// Retrieves the fish's owner.
+    /// @param fish_obj: The fish object to get the owner from
+    /// @return The address of the fish's owner
+    public fun get_owner(fish_obj: &Object<Fish>): address {
+        object::borrow(fish_obj).owner
+    }
+
+    /// Retrieves the fish's size.
+    /// @param fish_obj: The fish object to get the size from
+    /// @return The size of the fish
+    public fun get_size(fish_obj: &Object<Fish>): u64 {
+        object::borrow(fish_obj).size
+    }
+
+    /// Retrieves the fish's x-coordinate.
+    /// @param fish_obj: The fish object to get the x-coordinate from
+    /// @return The x-coordinate of the fish
+    public fun get_x(fish_obj: &Object<Fish>): u64 {
+        object::borrow(fish_obj).x
+    }
+
+    /// Retrieves the fish's y-coordinate.
+    /// @param fish_obj: The fish object to get the y-coordinate from
+    /// @return The y-coordinate of the fish
+    public fun get_y(fish_obj: &Object<Fish>): u64 {
+        object::borrow(fish_obj).y
+    }
+
+    /// Retrieves the fish's position (x and y coordinates).
+    /// @param fish_obj: The fish object to get the position from
+    /// @return A tuple containing the x and y coordinates of the fish
+    public fun get_position(fish_obj: &Object<Fish>): (u64, u64) {
+        let fish = object::borrow(fish_obj);
+        (fish.x, fish.y)
+    }
+
     #[test]
     fun test_create_fish() {
         let owner = @0x1;
