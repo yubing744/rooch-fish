@@ -3,6 +3,7 @@ module rooch_fish::player {
     use std::option::{Self, Option};
 
     friend rooch_fish::rooch_fish;
+    friend rooch_fish::pond;
 
     /// Error codes
     const E_OVERFLOW: u64 = 1001;
@@ -16,6 +17,7 @@ module rooch_fish::player {
         owner: address,
         feed_amount: u64,
         reward: u64,
+        fish_count: u64,
     }
 
     /// Represents the list of all players
@@ -32,6 +34,14 @@ module rooch_fish::player {
             total_feed: 0,
             player_count: 0,
         }
+    }
+
+    /// Adds a fish for a player
+    /// Aborts if the addition would cause an overflow
+    public(friend) fun add_fish(player_list: &mut PlayerList, owner: address) {
+        let player_state = get_or_create_player_state(player_list, owner);
+        assert!(player_state.fish_count < U64_MAX, E_OVERFLOW);
+        player_state.fish_count = player_state.fish_count + 1;
     }
 
     /// Adds feed for a player
@@ -90,6 +100,7 @@ module rooch_fish::player {
             owner,
             feed_amount: 0,
             reward: 0,
+            fish_count: 0,
         }
     }
 
@@ -267,6 +278,30 @@ module rooch_fish::player {
 
         add_reward(&mut player_list, owner, 0xFFFFFFFFFFFFFFFF);
         add_reward(&mut player_list, owner, 1);
+
+        drop_player_list(player_list);
+    }
+
+    #[test]
+    fun test_add_fish() {
+        let player_list = create_player_list();
+        let owner = @0x1;
+        
+        add_fish(&mut player_list, owner);
+        let state = get_state(&player_list, owner);
+        assert!(state.fish_count == 1, 1);
+        assert!(get_player_count(&player_list) == 1, 2);
+
+        add_fish(&mut player_list, owner);
+        let state = get_state(&player_list, owner);
+        assert!(state.fish_count == 2, 3);
+        assert!(get_player_count(&player_list) == 1, 4);
+
+        let new_owner = @0x2;
+        add_fish(&mut player_list, new_owner);
+        let state = get_state(&player_list, new_owner);
+        assert!(state.fish_count == 1, 5);
+        assert!(get_player_count(&player_list) == 2, 6);
 
         drop_player_list(player_list);
     }

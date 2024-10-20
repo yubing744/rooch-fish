@@ -56,6 +56,13 @@ module rooch_fish::fish {
         }
     }
 
+    #[test_only]
+    public(friend) fun move_fish_to_for_test(fish_obj: &mut Object<Fish>, x: u64, y: u64) {
+        let fish = object::borrow_mut(fish_obj);
+        fish.x = x;
+        fish.y = y;
+    }
+
     /// Increases the size of the fish.
     /// @param fish_obj: The fish object to grow
     /// @param amount: The amount to increase the fish's size
