@@ -266,4 +266,84 @@ module rooch_fish::quad_tree {
     public fun get_object_entry_type<T: copy + drop + store>(entry: &ObjectEntry<T>): u8 {
         entry.object_type
     }
+
+    #[test_only]
+    use std::debug;
+
+    #[test]
+    fun test_create_quad_tree() {
+        let tree = create_quad_tree<u64>(100, 100);
+        drop_quad_tree(tree);
+    }
+
+    #[test]
+    fun test_insert_and_query() {
+        let tree = create_quad_tree<u64>(100, 100);
+        
+        insert_object(&mut tree, 1, 1, 10, 10);
+        insert_object(&mut tree, 2, 1, 20, 20);
+        insert_object(&mut tree, 3, 1, 30, 30);
+
+        let result = query_range(&tree, 0, 0, 50, 50);
+        assert!(vector::length(&result) == 3, 0);
+
+        let result = query_range(&tree, 0, 0, 15, 15);
+        assert!(vector::length(&result) == 1, 1);
+
+        drop_quad_tree(tree);
+    }
+
+    #[test]
+    fun test_remove_object() {
+        let tree = create_quad_tree<u64>(100, 100);
+        
+        insert_object(&mut tree, 1, 1, 10, 10);
+        insert_object(&mut tree, 2, 1, 20, 20);
+
+        let result = query_range(&tree, 0, 0, 50, 50);
+        assert!(vector::length(&result) == 2, 0);
+
+        remove_object(&mut tree, 1, 1, 10, 10);
+
+        let result = query_range(&tree, 0, 0, 50, 50);
+        assert!(vector::length(&result) == 1, 1);
+
+        drop_quad_tree(tree);
+    }
+
+    #[test]
+    fun test_update_object_position() {
+        let tree = create_quad_tree<u64>(100, 100);
+        
+        insert_object(&mut tree, 1, 1, 10, 10);
+
+        let result = query_range(&tree, 0, 0, 15, 15);
+        assert!(vector::length(&result) == 1, 0);
+
+        update_object_position(&mut tree, 1, 1, 10, 10, 50, 50);
+
+        let result = query_range(&tree, 0, 0, 15, 15);
+        assert!(vector::length(&result) == 0, 1);
+
+        let result = query_range(&tree, 45, 45, 10, 10);
+        assert!(vector::length(&result) == 1, 2);
+
+        drop_quad_tree(tree);
+    }
+
+    #[test]
+    fun test_get_object_entry_id_and_type() {
+        let tree = create_quad_tree<u64>(100, 100);
+        
+        insert_object(&mut tree, 1, 2, 10, 10);
+
+        let result = query_range(&tree, 0, 0, 15, 15);
+        assert!(vector::length(&result) == 1, 0);
+
+        let entry = vector::borrow(&result, 0);
+        assert!(get_object_entry_id(entry) == 1, 1);
+        assert!(get_object_entry_type(entry) == 2, 2);
+
+        drop_quad_tree(tree);
+    }
 }

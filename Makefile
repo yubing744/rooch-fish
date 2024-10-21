@@ -22,7 +22,7 @@ publish:
 # 测试合约
 debug:
 	@echo "Running tests..."
-	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default economic_system_test
+	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default quad_tree
 
 # 测试合约
 test:
