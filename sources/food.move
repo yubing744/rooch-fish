@@ -73,6 +73,13 @@ module rooch_fish::food {
         (food.x, food.y)
     }
 
+    #[test_only]
+    public fun set_position_for_test(food: &mut Object<Food>, x: u64, y: u64) {
+        let food_mut = object::borrow_mut(food);
+        food_mut.x = x;
+        food_mut.y = y;
+    }
+
     /// Destroys a food object.
     public(friend) fun drop_food(food_obj: Object<Food>) {
         let Food { id: _, size: _, x: _, y: _ } = object::remove(food_obj);

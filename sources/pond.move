@@ -149,12 +149,12 @@ module rooch_fish::pond {
         fish::move_fish_to_for_test(fish, x, y);
     }
 
-    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u64) {
+    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u256) {
         let account_addr = signer::address_of(account);
-        let coin = account_coin_store::withdraw(account, (amount as u256));
+        let coin = account_coin_store::withdraw(account, amount);
         coin_store::deposit(&mut pond_state.treasury.coin_store, coin);
 
-        let food_count = amount / 10;
+        let food_count = amount / (pond_state.purchase_amount / 100);
         let i = 0;
         while (i < food_count) {
             let (x, y) = utils::random_position(pond_state.width, pond_state.height);
@@ -167,6 +167,12 @@ module rooch_fish::pond {
         };
 
         player::add_feed(&mut pond_state.player_list, account_addr, amount);
+    }
+
+    #[test_only]
+    public fun set_food_position_for_test(pond_state: &mut PondState, food_id: u64, x: u64, y: u64) {
+        let food = get_food_mut(pond_state, food_id);
+        food::set_position_for_test(food, x, y);
     }
 
     public(friend) fun destroy_fish(pond_state: &mut PondState, account: &signer, fish_id: u64): u256 {
@@ -183,7 +189,7 @@ module rooch_fish::pond {
         account_coin_store::deposit(account_addr, reward_coin);
 
         let reward_amount = u256::divide_and_round_up(reward, u256::pow(10, gas_coin::decimals()));
-        player::add_reward(&mut pond_state.player_list, account_addr, (reward_amount as u64));
+        player::add_reward(&mut pond_state.player_list, account_addr, reward_amount);
 
         event::emit(FishDestroyedEvent { pond_id: pond_state.id, fish_id, reward });
 
@@ -200,6 +206,11 @@ module rooch_fish::pond {
     fun get_fish_mut(pond_state: &mut PondState, fish_id: u64): &mut Object<Fish> {
         let index = find_fish_index(pond_state, fish_id);
         table_vec::borrow_mut(&mut pond_state.fishes, index)
+    }
+
+    fun get_food_mut(pond_state: &mut PondState, food_id: u64): &mut Object<Food> {
+        let index = find_food_index(pond_state, food_id);
+        table_vec::borrow_mut(&mut pond_state.foods, index)
     }
 
     fun add_fish(pond_state: &mut PondState, fish: Object<Fish>) {
@@ -396,7 +407,11 @@ module rooch_fish::pond {
         player::get_player_count(&pond_state.player_list)
     }
 
-    public fun get_total_feed(pond_state: &PondState): u64 {
+    public fun get_player_fish_ids(pond_state: &PondState, owner: address): vector<u64> {
+        player::get_player_fish_ids(&pond_state.player_list, owner)
+    }
+
+    public fun get_total_feed(pond_state: &PondState): u256 {
         player::get_total_feed(&pond_state.player_list)
     }
 
@@ -440,6 +455,11 @@ module rooch_fish::pond {
         object::to_shared(treasury_obj);
 
         player::drop_player_list(player_list);
+    }
+
+    #[test_only]
+    public fun get_last_food_id(pond_state: &PondState): u64 {
+        pond_state.next_food_id - 1
     }
 
     #[test_only]
@@ -530,7 +550,7 @@ module rooch_fish::pond {
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
 
         feed_food(pond_state, &account, 100);
-        assert!(get_food_count(pond_state) == 10, 1);
+        assert!(get_food_count(pond_state) == 20, 1);
         assert!(get_total_feed(pond_state) == 100, 2);
 
         drop_pond(pond_obj);
@@ -581,6 +601,47 @@ module rooch_fish::pond {
 
         fish::drop_fish(fish1);
         fish::drop_fish(fish2);
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42, other_account = @0x43)]
+    fun test_get_player_fish_ids(account: signer, other_account: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        gas_coin::faucet_for_test(account_addr, 1000000);
+
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
+
+        // Purchase three fish for the account
+        let fish_id1 = purchase_fish(pond_state, &account);
+        let fish_id2 = purchase_fish(pond_state, &account);
+        let fish_id3 = purchase_fish(pond_state, &account);
+
+        // Get the fish IDs for the account
+        let fish_ids = get_player_fish_ids(pond_state, account_addr);
+
+        // Assert that the returned vector contains the correct fish IDs
+        assert!(vector::length(&fish_ids) == 3, 1);
+        assert!(vector::contains(&fish_ids, &fish_id1), 2);
+        assert!(vector::contains(&fish_ids, &fish_id2), 3);
+        assert!(vector::contains(&fish_ids, &fish_id3), 4);
+
+        // Purchase a fish for another account to ensure it's not included
+        let other_account_addr = signer::address_of(&other_account);
+        gas_coin::faucet_for_test(other_account_addr, 1000000);
+        let other_fish_id = purchase_fish(pond_state, &other_account);
+
+        // Get the fish IDs for the original account again
+        let fish_ids = get_player_fish_ids(pond_state, account_addr);
+
+        // Assert that the other account's fish is not included
+        assert!(vector::length(&fish_ids) == 3, 5);
+        assert!(!vector::contains(&fish_ids, &other_fish_id), 6);
+
         drop_pond(pond_obj);
     }
 }

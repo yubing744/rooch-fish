@@ -96,7 +96,7 @@ module rooch_fish::rooch_fish {
         pond::move_fish(pond_state, account, fish_id, direction);
     }
 
-    public entry fun feed_food(account: &signer, pond_id: u64, amount: u64) {
+    public entry fun feed_food(account: &signer, pond_id: u64, amount: u256) {
         let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
         let account_addr = signer::address_of(account);
 
@@ -117,7 +117,7 @@ module rooch_fish::rooch_fish {
         let reward = pond::destroy_fish(pond_state, account, fish_id);
 
         let reward_amount = u256::divide_and_round_up(reward, u256::pow(10, gas_coin::decimals()));
-        player::add_reward(&mut game_state.player_list, account_addr, (reward_amount as u64));
+        player::add_reward(&mut game_state.player_list, account_addr, reward_amount);
     }
 
     public fun get_pond_player_list(pond_id: u64): &PlayerList {
@@ -134,11 +134,18 @@ module rooch_fish::rooch_fish {
         pond::get_player_count(pond_state)
     }
 
-    public fun get_pond_total_feed(pond_id: u64): u64 {
+    public fun get_pond_total_feed(pond_id: u64): u256 {
         let game_state = account::borrow_resource<GameState>(@rooch_fish);
         let pond_obj = table::borrow(&game_state.ponds, pond_id);
         let pond_state = object::borrow(pond_obj);
         pond::get_total_feed(pond_state)
+    }
+
+    public fun get_pond_player_fish_ids(pond_id: u64, owner: address): vector<u64> {
+        let game_state = account::borrow_resource<GameState>(@rooch_fish);
+        let pond_obj = table::borrow(&game_state.ponds, pond_id);
+        let pond_state = object::borrow(pond_obj);
+        pond::get_player_fish_ids(pond_state, owner)
     }
 
     public fun get_global_player_list(): &PlayerList {
@@ -151,7 +158,7 @@ module rooch_fish::rooch_fish {
         player::get_player_count(&game_state.player_list)
     }
 
-    public fun get_global_total_feed(): u64 {
+    public fun get_global_total_feed(): u256 {
         let game_state = account::borrow_resource<GameState>(@rooch_fish);
         player::get_total_feed(&game_state.player_list)
     }
@@ -180,5 +187,21 @@ module rooch_fish::rooch_fish {
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
         let pond_state = object::borrow_mut(pond_obj);
         pond::move_fish_to_for_test(pond_state, fish_id, x, y);
+    }
+
+    #[test_only]
+    public fun set_food_position_for_test(pond_id: u64, food_id: u64, x: u64, y: u64) {
+        let game_state = account::borrow_mut_resource<GameState>(@rooch_fish);
+        let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
+        let pond_state = object::borrow_mut(pond_obj);
+        pond::set_food_position_for_test(pond_state, food_id, x, y);
+    }
+
+    #[test_only]
+    public fun get_last_food_id(pond_id: u64): u64 {
+        let game_state = account::borrow_resource<GameState>(@rooch_fish);
+        let pond_obj = table::borrow(&game_state.ponds, pond_id);
+        let pond_state = object::borrow(pond_obj);
+        pond::get_last_food_id(pond_state)
     }
 }
