@@ -83,8 +83,8 @@ module rooch_fish::rooch_fish {
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
         let pond_state = object::borrow_mut(pond_obj);
 
-        pond::purchase_fish(pond_state, account);
-        player::add_fish(&mut game_state.player_list, account_addr);
+        let fish_id = pond::purchase_fish(pond_state, account);
+        player::add_fish(&mut game_state.player_list, account_addr, fish_id);
     }
 
     public entry fun move_fish(account: &signer, pond_id: u64, fish_id: u64, direction: u8) {

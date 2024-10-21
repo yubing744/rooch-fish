@@ -1,6 +1,7 @@
 module rooch_fish::player {
     use moveos_std::table::{Self, Table};
     use std::option::{Self, Option};
+    use std::vector;
 
     friend rooch_fish::rooch_fish;
     friend rooch_fish::pond;
@@ -8,6 +9,7 @@ module rooch_fish::player {
     /// Error codes
     const E_OVERFLOW: u64 = 1001;
     const E_INVALID_PLAYER: u64 = 1002;
+    const E_FISH_NOT_FOUND: u64 = 1003;
 
     /// Maximum value for u64
     const U64_MAX: u64 = 18446744073709551615;
@@ -18,6 +20,7 @@ module rooch_fish::player {
         feed_amount: u64,
         reward: u64,
         fish_count: u64,
+        fish_ids: vector<u64>,
     }
 
     /// Represents the list of all players
@@ -38,10 +41,22 @@ module rooch_fish::player {
 
     /// Adds a fish for a player
     /// Aborts if the addition would cause an overflow
-    public(friend) fun add_fish(player_list: &mut PlayerList, owner: address) {
+    public(friend) fun add_fish(player_list: &mut PlayerList, owner: address, fish_id: u64) {
         let player_state = get_or_create_player_state(player_list, owner);
         assert!(player_state.fish_count < U64_MAX, E_OVERFLOW);
         player_state.fish_count = player_state.fish_count + 1;
+        vector::push_back(&mut player_state.fish_ids, fish_id);
+    }
+
+    /// Removes a fish from a player
+    /// Aborts if the player or fish doesn't exist
+    public(friend) fun remove_fish(player_list: &mut PlayerList, owner: address, fish_id: u64) {
+        let player_state = get_or_create_player_state(player_list, owner);
+        assert!(player_state.fish_count > 0, E_INVALID_PLAYER);
+        player_state.fish_count = player_state.fish_count - 1;
+        let (found, index) = vector::index_of(&player_state.fish_ids, &fish_id);
+        assert!(found, E_FISH_NOT_FOUND);
+        vector::remove(&mut player_state.fish_ids, index);
     }
 
     /// Adds feed for a player
@@ -79,6 +94,13 @@ module rooch_fish::player {
         }
     }
 
+    /// Gets the list of fish IDs for a player
+    /// Aborts if the player does not exist
+    public fun get_fish_ids(player_list: &PlayerList, owner: address): vector<u64> {
+        assert!(player_exists(player_list, owner), E_INVALID_PLAYER);
+        *&table::borrow(&player_list.players, owner).fish_ids
+    }
+
     /// Checks if a player exists
     public fun player_exists(player_list: &PlayerList, owner: address): bool {
         table::contains(&player_list.players, owner)
@@ -101,6 +123,7 @@ module rooch_fish::player {
             feed_amount: 0,
             reward: 0,
             fish_count: 0,
+            fish_ids: vector::empty(),
         }
     }
 
@@ -283,25 +306,42 @@ module rooch_fish::player {
     }
 
     #[test]
-    fun test_add_fish() {
+    fun test_add_and_remove_fish() {
         let player_list = create_player_list();
         let owner = @0x1;
         
-        add_fish(&mut player_list, owner);
+        add_fish(&mut player_list, owner, 1);
         let state = get_state(&player_list, owner);
         assert!(state.fish_count == 1, 1);
-        assert!(get_player_count(&player_list) == 1, 2);
+        assert!(vector::length(&state.fish_ids) == 1, 2);
+        assert!(*vector::borrow(&state.fish_ids, 0) == 1, 3);
 
-        add_fish(&mut player_list, owner);
+        add_fish(&mut player_list, owner, 2);
         let state = get_state(&player_list, owner);
-        assert!(state.fish_count == 2, 3);
-        assert!(get_player_count(&player_list) == 1, 4);
+        assert!(state.fish_count == 2, 4);
+        assert!(vector::length(&state.fish_ids) == 2, 5);
 
-        let new_owner = @0x2;
-        add_fish(&mut player_list, new_owner);
-        let state = get_state(&player_list, new_owner);
-        assert!(state.fish_count == 1, 5);
-        assert!(get_player_count(&player_list) == 2, 6);
+        remove_fish(&mut player_list, owner, 1);
+        let state = get_state(&player_list, owner);
+        assert!(state.fish_count == 1, 6);
+        assert!(vector::length(&state.fish_ids) == 1, 7);
+        assert!(*vector::borrow(&state.fish_ids, 0) == 2, 8);
+
+        let fish_ids = get_fish_ids(&player_list, owner);
+        assert!(vector::length(&fish_ids) == 1, 9);
+        assert!(*vector::borrow(&fish_ids, 0) == 2, 10);
+
+        drop_player_list(player_list);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_FISH_NOT_FOUND)]
+    fun test_remove_non_existent_fish() {
+        let player_list = create_player_list();
+        let owner = @0x1;
+
+        add_fish(&mut player_list, owner, 1);
+        remove_fish(&mut player_list, owner, 2);
 
         drop_player_list(player_list);
     }

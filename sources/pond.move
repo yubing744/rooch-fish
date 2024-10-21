@@ -112,7 +112,7 @@ module rooch_fish::pond {
         let fish = fish::create_fish(account_addr, fish_id, 10, x, y);
         add_fish(pond_state, fish);
 
-        player::add_fish(&mut pond_state.player_list, account_addr);
+        player::add_fish(&mut pond_state.player_list, account_addr, fish_id);
 
         event::emit(FishPurchasedEvent { pond_id: pond_state.id, fish_id, owner: account_addr });
 
@@ -176,6 +176,7 @@ module rooch_fish::pond {
         assert!(is_fish_in_exit_zone(pond_state, fish), ERR_FISH_NOT_IN_EXIT_ZONE);
 
         let removed_fish = remove_fish(pond_state, fish_id);
+        player::remove_fish(&mut pond_state.player_list, account_addr, fish_id);
         let reward = calculate_reward(&removed_fish, pond_state);
 
         let reward_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, reward);
@@ -314,6 +315,8 @@ module rooch_fish::pond {
         while (k < vector::length(&fish_ids_to_remove)) {
             let fish_id = *vector::borrow(&fish_ids_to_remove, k);
             let fish_obj = remove_fish(pond_state, fish_id);
+            let owner = fish::get_owner(&fish_obj);
+            player::remove_fish(&mut pond_state.player_list, owner, fish_id);
             fish::drop_fish(fish_obj);
             k = k + 1;
         };
