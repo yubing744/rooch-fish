@@ -20,9 +20,14 @@ publish:
 	rooch client publish --path $(PACKAGE_PATH) --gas-budget $(GAS_BUDGET) --named-addresses rooch_fish=default
 
 # 测试合约
+debug:
+	@echo "Running tests..."
+	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default economic_system_test
+
+# 测试合约
 test:
 	@echo "Running tests..."
-	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --named-addresses rooch_fish=default
+	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default
 
 # 清理构建文件
 clean:

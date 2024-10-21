@@ -1,6 +1,8 @@
 module rooch_fish::pond {
     use std::vector;
     use std::u256;
+    use std::string;
+
     use moveos_std::object::{Self, Object};
     use moveos_std::signer;
     use moveos_std::table_vec::{Self, TableVec};
@@ -12,6 +14,10 @@ module rooch_fish::pond {
     use rooch_fish::food::{Self, Food};
     use rooch_fish::utils;
     use rooch_fish::player::{Self, PlayerList};
+    use rooch_fish::quad_tree;
+
+    #[test_only]
+    use std::debug;
 
     friend rooch_fish::rooch_fish;
 
@@ -23,6 +29,11 @@ module rooch_fish::pond {
     const ERR_UNAUTHORIZED: u64 = 6;
     const ERR_FISH_NOT_IN_EXIT_ZONE: u64 = 7;
     const ERR_INVALID_POSITION: u64 = 8;
+    const ERR_FISH_OUT_OF_BOUNDS: u64 = 9;
+    const ERR_INSUFFICIENT_TREASURY_BALANCE: u64 = 10;
+
+    const OBJECT_TYPE_FISH: u8 = 1;
+    const OBJECT_TYPE_FOOD: u8 = 2;
 
     struct ExitZone has store, copy, drop {
         x: u64,
@@ -39,6 +50,7 @@ module rooch_fish::pond {
         fishes: TableVec<Object<Fish>>,
         foods: TableVec<Object<Food>>,
         exit_zones: vector<ExitZone>,
+        quad_tree: quad_tree::QuadTree<u64>,
         fish_count: u64,
         food_count: u64,
         width: u64,
@@ -84,6 +96,7 @@ module rooch_fish::pond {
             fishes: table_vec::new(),
             foods: table_vec::new(),
             exit_zones: vector::empty(),
+            quad_tree: quad_tree::create_quad_tree(width, height),
             fish_count: 0,
             food_count: 0,
             width,
@@ -129,10 +142,12 @@ module rooch_fish::pond {
         fish::move_fish(account, fish, direction);
 
         let (new_x, new_y) = fish::get_position(fish);
-        assert!(new_x < pond_state.width && new_y < pond_state.height, ERR_INVALID_POSITION);
+        assert!(new_x < pond_state.width && new_y < pond_state.height, ERR_FISH_OUT_OF_BOUNDS);
 
         let new_x = utils::clamp(new_x, 0, pond_state.width);
         let new_y = utils::clamp(new_y, 0, pond_state.height);
+
+        quad_tree::update_object_position(&mut pond_state.quad_tree, fish_id, OBJECT_TYPE_FISH, old_x, old_y, new_x, new_y);
 
         if (new_x != old_x || new_y != old_y) {
             handle_collisions(pond_state, fish_id);
@@ -185,6 +200,7 @@ module rooch_fish::pond {
         player::remove_fish(&mut pond_state.player_list, account_addr, fish_id);
         let reward = calculate_reward(&removed_fish, pond_state);
 
+        assert!(coin_store::balance(&pond_state.treasury.coin_store) >= reward, ERR_INSUFFICIENT_TREASURY_BALANCE);
         let reward_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, reward);
         account_coin_store::deposit(account_addr, reward_coin);
 
@@ -208,6 +224,11 @@ module rooch_fish::pond {
         table_vec::borrow_mut(&mut pond_state.fishes, index)
     }
 
+    public fun get_food(pond_state: &PondState, food_id: u64): &Object<Food> {
+        let index = find_food_index(pond_state, food_id);
+        table_vec::borrow(&pond_state.foods, index)
+    }
+
     fun get_food_mut(pond_state: &mut PondState, food_id: u64): &mut Object<Food> {
         let index = find_food_index(pond_state, food_id);
         table_vec::borrow_mut(&mut pond_state.foods, index)
@@ -215,6 +236,10 @@ module rooch_fish::pond {
 
     fun add_fish(pond_state: &mut PondState, fish: Object<Fish>) {
         assert!(pond_state.fish_count < pond_state.max_fish_count, ERR_MAX_FISH_COUNT_REACHED);
+
+        let (id, _, _, x, y) = fish::get_fish_info(&fish);
+        quad_tree::insert_object(&mut pond_state.quad_tree, id, OBJECT_TYPE_FISH, x, y);
+        
         table_vec::push_back(&mut pond_state.fishes, fish);
         pond_state.fish_count = pond_state.fish_count + 1;
     }
@@ -222,12 +247,21 @@ module rooch_fish::pond {
     fun remove_fish(pond_state: &mut PondState, fish_id: u64): Object<Fish> {
         let index = find_fish_index(pond_state, fish_id);
         let fish = table_vec::swap_remove(&mut pond_state.fishes, index);
+
+        let (_, _, _, x, y) = fish::get_fish_info(&fish);
+        quad_tree::remove_object(&mut pond_state.quad_tree, fish_id, OBJECT_TYPE_FISH, x, y);
+
         pond_state.fish_count = pond_state.fish_count - 1;
         fish
     }
 
     fun add_food(pond_state: &mut PondState, food: Object<Food>) {
         assert!(pond_state.food_count < pond_state.max_food_count, ERR_MAX_FOOD_COUNT_REACHED);
+
+        let id = food::get_id(&food);
+        let (x, y) = food::get_position(&food);
+        quad_tree::insert_object(&mut pond_state.quad_tree, id, OBJECT_TYPE_FOOD, x, y);
+
         table_vec::push_back(&mut pond_state.foods, food);
         pond_state.food_count = pond_state.food_count + 1;
     }
@@ -235,6 +269,10 @@ module rooch_fish::pond {
     fun remove_food(pond_state: &mut PondState, food_id: u64): Object<Food> {
         let index = find_food_index(pond_state, food_id);
         let food = table_vec::swap_remove(&mut pond_state.foods, index);
+
+        let (x, y) = food::get_position(&food);
+        quad_tree::remove_object(&mut pond_state.quad_tree, food_id, OBJECT_TYPE_FOOD, x, y);
+
         pond_state.food_count = pond_state.food_count - 1;
         food
     }
@@ -266,25 +304,60 @@ module rooch_fish::pond {
     }
 
     fun handle_collisions(pond_state: &mut PondState, fish_id: u64) {
+        debug::print(&string::utf8(b"handle_collisions start fish_id:"));
+        debug::print(&fish_id);
+
         let fish = get_fish(pond_state, fish_id);
         let fish_size = fish::get_size(fish);
         let (fish_x, fish_y) = fish::get_position(fish);
 
-        handle_food_collisions(pond_state, fish_id, fish_size, fish_x, fish_y);
-        handle_fish_collisions(pond_state, fish_id, fish_size, fish_x, fish_y);
-    }
+        let query_range = fish_size * 2;
+        let nearby_objects = quad_tree::query_range(
+            &pond_state.quad_tree,
+            utils::saturating_sub(fish_x, query_range),
+            utils::saturating_sub(fish_y, query_range),
+            query_range * 2,
+            query_range * 2,
+        );
 
-    fun handle_food_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64) {
-        let food_ids_to_remove = vector::empty<u64>();
-        let growth_amount = 0u64;
+        let nearby_objects_count = vector::length(&nearby_objects);
+        debug::print(&string::utf8(b"handle_collisions nearby_objects:"));
+        debug::print(&nearby_objects_count);
+
+        let nearby_fish = vector::empty();
+        let nearby_food = vector::empty();
 
         let i = 0;
-        while (i < table_vec::length(&pond_state.foods)) {
-            let food = table_vec::borrow(&pond_state.foods, i);
+        while (i < vector::length(&nearby_objects)) {
+            let object_entry = vector::borrow(&nearby_objects, i);
+            if (quad_tree::get_object_entry_type(object_entry) == OBJECT_TYPE_FISH && 
+                quad_tree::get_object_entry_id(object_entry) != fish_id) {
+                vector::push_back(&mut nearby_fish, quad_tree::get_object_entry_id(object_entry));
+            } else if (quad_tree::get_object_entry_type(object_entry) == OBJECT_TYPE_FOOD) {
+                vector::push_back(&mut nearby_food, quad_tree::get_object_entry_id(object_entry));
+            };
+            i = i + 1;
+        };
+
+        handle_food_collisions(pond_state, fish_id, fish_size, fish_x, fish_y, nearby_food);
+        handle_fish_collisions(pond_state, fish_id, fish_size, fish_x, fish_y, nearby_fish);
+
+        debug::print(&string::utf8(b"handle_collisions end fish_id:"));
+        debug::print(&fish_id);
+    }
+
+    fun handle_food_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64, nearby_food: vector<u64>) {
+        let growth_amount = 0u64;
+        let food_ids_to_remove = vector::empty<u64>();
+
+        let i = 0;
+        while (i < vector::length(&nearby_food)) {
+            let food_id = *vector::borrow(&nearby_food, i);
+            let food = get_food(pond_state, food_id);
             let (food_x, food_y) = food::get_position(food);
             if (utils::calculate_distance(fish_x, fish_y, food_x, food_y) <= fish_size) {
                 growth_amount = growth_amount + food::get_size(food);
-                vector::push_back(&mut food_ids_to_remove, food::get_id(food));
+                vector::push_back(&mut food_ids_to_remove, food_id);
             };
             i = i + 1;
         };
@@ -301,35 +374,34 @@ module rooch_fish::pond {
         };
     }
 
-    fun handle_fish_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64) {
-        let fish_ids_to_remove = vector::empty<u64>();
+    fun handle_fish_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64, nearby_fish: vector<u64>) {
         let growth_amount = 0u64;
+        let fish_ids_to_remove = vector::empty<u64>();
 
-        let j = 0;
-        while (j < table_vec::length(&pond_state.fishes)) {
-            let other_fish = table_vec::borrow(&pond_state.fishes, j);
-            if (fish_id != fish::get_id(other_fish)) {
-                let (other_x, other_y) = fish::get_position(other_fish);
-                let other_size = fish::get_size(other_fish);
-                if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
-                    growth_amount = growth_amount + (other_size / 2);
-                    vector::push_back(&mut fish_ids_to_remove, fish::get_id(other_fish));
-                }
+        let i = 0;
+        while (i < vector::length(&nearby_fish)) {
+            let other_fish_id = *vector::borrow(&nearby_fish, i);
+            let other_fish = get_fish(pond_state, other_fish_id);
+            let (other_x, other_y) = fish::get_position(other_fish);
+            let other_size = fish::get_size(other_fish);
+            if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
+                growth_amount = growth_amount + (other_size / 2);
+                vector::push_back(&mut fish_ids_to_remove, other_fish_id);
             };
-            j = j + 1;
+            i = i + 1;
         };
 
         let fish_mut = get_fish_mut(pond_state, fish_id);
         fish::grow_fish(fish_mut, growth_amount);
 
-        let k = 0;
-        while (k < vector::length(&fish_ids_to_remove)) {
-            let fish_id = *vector::borrow(&fish_ids_to_remove, k);
+        let j = 0;
+        while (j < vector::length(&fish_ids_to_remove)) {
+            let fish_id = *vector::borrow(&fish_ids_to_remove, j);
             let fish_obj = remove_fish(pond_state, fish_id);
             let owner = fish::get_owner(&fish_obj);
             player::remove_fish(&mut pond_state.player_list, owner, fish_id);
             fish::drop_fish(fish_obj);
-            k = k + 1;
+            j = j + 1;
         };
     }
 
@@ -421,6 +493,7 @@ module rooch_fish::pond {
             fishes,
             foods,
             exit_zones,
+            quad_tree,
             fish_count: _,
             food_count: _,
             width: _,
@@ -433,6 +506,8 @@ module rooch_fish::pond {
             treasury,
             player_list
         } = object::remove(pond);
+
+        quad_tree::drop_quad_tree(quad_tree);
 
         while (!vector::is_empty(&exit_zones)) {
             vector::pop_back(&mut exit_zones);

@@ -1,0 +1,269 @@
+module rooch_fish::quad_tree {
+    use std::vector;
+    use moveos_std::table::{Self, Table};
+
+    const MAX_DEPTH: u8 = 3;
+    const MAX_OBJECTS: u64 = 4;
+
+    struct Point has copy, drop, store {
+        x: u64,
+        y: u64,
+    }
+
+    struct Rectangle has copy, drop, store {
+        x: u64,
+        y: u64,
+        width: u64,
+        height: u64,
+    }
+
+    struct ObjectEntry<T: copy + drop + store> has copy, drop, store {
+        id: T,
+        object_type: u8,
+    }
+
+    struct QuadTreeNode<T: copy + drop + store> has copy, drop, store {
+        boundary: Rectangle,
+        objects: vector<ObjectEntry<T>>,
+        is_divided: bool,
+        nw: u64,
+        ne: u64,
+        sw: u64,
+        se: u64,
+    }
+
+    struct QuadTree<T: copy + drop + store> has key, store {
+        nodes: Table<u64, QuadTreeNode<T>>,
+        next_node_id: u64,
+        root: u64,
+        width: u64,
+        height: u64,
+    }
+
+    public fun create_quad_tree<T: copy + drop + store>(width: u64, height: u64): QuadTree<T> {
+        let root_node = QuadTreeNode<T> {
+            boundary: Rectangle { x: 0, y: 0, width, height },
+            objects: vector::empty(),
+            is_divided: false,
+            nw: 0, ne: 0, sw: 0, se: 0,
+        };
+        let nodes = table::new();
+        table::add(&mut nodes, 0, root_node);
+        QuadTree<T> {
+            nodes,
+            next_node_id: 1,
+            root: 0,
+            width,
+            height,
+        }
+    }
+
+    public fun insert_object<T: copy + drop + store>(tree: &mut QuadTree<T>, id: T, object_type: u8, x: u64, y: u64) {
+        insert_object_recursive(tree, id, object_type, x, y, 0, 0);
+    }
+
+    fun insert_object_recursive<T: copy + drop + store>(
+        tree: &mut QuadTree<T>,
+        id: T,
+        object_type: u8,
+        x: u64,
+        y: u64,
+        node_id: u64,
+        depth: u8
+    ) {
+        if (depth >= MAX_DEPTH) {
+            return
+        };
+
+        let node = table::borrow_mut(&mut tree.nodes, node_id);
+        if (!node.is_divided) {
+            if (vector::length(&node.objects) < MAX_OBJECTS) {
+                vector::push_back(&mut node.objects, ObjectEntry { id, object_type });
+                return
+            };
+            subdivide(tree, node_id);
+        };
+
+        let node = table::borrow(&tree.nodes, node_id);
+        if (x < node.boundary.x + node.boundary.width / 2) {
+            if (y < node.boundary.y + node.boundary.height / 2) {
+                insert_object_recursive(tree, id, object_type, x, y, node.nw, depth + 1);
+            } else {
+                insert_object_recursive(tree, id, object_type, x, y, node.sw, depth + 1);
+            };
+        } else {
+            if (y < node.boundary.y + node.boundary.height / 2) {
+                insert_object_recursive(tree, id, object_type, x, y, node.ne, depth + 1);
+            } else {
+                insert_object_recursive(tree, id, object_type, x, y, node.se, depth + 1);
+            };
+        };
+    }
+
+    fun subdivide<T: copy + drop + store>(tree: &mut QuadTree<T>, node_id: u64) {
+        let node = table::borrow_mut(&mut tree.nodes, node_id);
+        if (node.is_divided) {
+            return
+        };
+
+        let x = node.boundary.x;
+        let y = node.boundary.y;
+        let w = node.boundary.width / 2;
+        let h = node.boundary.height / 2;
+
+        let nw = tree.next_node_id;
+        tree.next_node_id = tree.next_node_id + 1;
+        let ne = tree.next_node_id;
+        tree.next_node_id = tree.next_node_id + 1;
+        let sw = tree.next_node_id;
+        tree.next_node_id = tree.next_node_id + 1;
+        let se = tree.next_node_id;
+        tree.next_node_id = tree.next_node_id + 1;
+
+        table::add(&mut tree.nodes, nw, QuadTreeNode<T> {
+            boundary: Rectangle { x, y, width: w, height: h },
+            objects: vector::empty(),
+            is_divided: false,
+            nw: 0, ne: 0, sw: 0, se: 0,
+        });
+        table::add(&mut tree.nodes, ne, QuadTreeNode<T> {
+            boundary: Rectangle { x: x + w, y, width: w, height: h },
+            objects: vector::empty(),
+            is_divided: false,
+            nw: 0, ne: 0, sw: 0, se: 0,
+        });
+        table::add(&mut tree.nodes, sw, QuadTreeNode<T> {
+            boundary: Rectangle { x, y: y + h, width: w, height: h },
+            objects: vector::empty(),
+            is_divided: false,
+            nw: 0, ne: 0, sw: 0, se: 0,
+        });
+        table::add(&mut tree.nodes, se, QuadTreeNode<T> {
+            boundary: Rectangle { x: x + w, y: y + h, width: w, height: h },
+            objects: vector::empty(),
+            is_divided: false,
+            nw: 0, ne: 0, sw: 0, se: 0,
+        });
+
+        let node = table::borrow_mut(&mut tree.nodes, node_id);
+        node.nw = nw;
+        node.ne = ne;
+        node.sw = sw;
+        node.se = se;
+        node.is_divided = true;
+    }
+
+    public fun query_range<T: copy + drop + store>(
+        tree: &QuadTree<T>,
+        x: u64,
+        y: u64,
+        width: u64,
+        height: u64
+    ): vector<ObjectEntry<T>> {
+        let range = Rectangle { x, y, width, height };
+        let result = vector::empty();
+        query_range_recursive(tree, tree.root, &range, &mut result);
+        result
+    }
+
+    fun query_range_recursive<T: copy + drop + store>(
+        tree: &QuadTree<T>,
+        node_id: u64,
+        range: &Rectangle,
+        result: &mut vector<ObjectEntry<T>>
+    ) {
+        let node = table::borrow(&tree.nodes, node_id);
+        if (!intersects(&node.boundary, range)) {
+            return
+        };
+
+        let i = 0;
+        while (i < vector::length(&node.objects)) {
+            let object_entry = vector::borrow(&node.objects, i);
+            vector::push_back(result, *object_entry);
+            i = i + 1;
+        };
+
+        if (node.is_divided) {
+            query_range_recursive(tree, node.nw, range, result);
+            query_range_recursive(tree, node.ne, range, result);
+            query_range_recursive(tree, node.sw, range, result);
+            query_range_recursive(tree, node.se, range, result);
+        };
+    }
+
+    fun intersects(r1: &Rectangle, r2: &Rectangle): bool {
+        !(r2.x > r1.x + r1.width ||
+          r2.x + r2.width < r1.x ||
+          r2.y > r1.y + r1.height ||
+          r2.y + r2.height < r1.y)
+    }
+
+    public fun remove_object<T: copy + drop + store>(tree: &mut QuadTree<T>, id: T, object_type: u8, x: u64, y: u64) {
+        remove_object_recursive(tree, id, object_type, x, y, 0);
+    }
+
+    fun remove_object_recursive<T: copy + drop + store>(
+        tree: &mut QuadTree<T>,
+        id: T,
+        object_type: u8,
+        x: u64,
+        y: u64,
+        node_id: u64
+    ) {
+        let node = table::borrow_mut(&mut tree.nodes, node_id);
+        if (!node.is_divided) {
+            let i = 0;
+            while (i < vector::length(&node.objects)) {
+                let object_entry = vector::borrow(&node.objects, i);
+                if (object_entry.id == id && object_entry.object_type == object_type) {
+                    vector::remove(&mut node.objects, i);
+                    return
+                };
+                i = i + 1;
+            };
+            return
+        };
+
+        if (x < node.boundary.x + node.boundary.width / 2) {
+            if (y < node.boundary.y + node.boundary.height / 2) {
+                remove_object_recursive(tree, id, object_type, x, y, node.nw);
+            } else {
+                remove_object_recursive(tree, id, object_type, x, y, node.sw);
+            };
+        } else {
+            if (y < node.boundary.y + node.boundary.height / 2) {
+                remove_object_recursive(tree, id, object_type, x, y, node.ne);
+            } else {
+                remove_object_recursive(tree, id, object_type, x, y, node.se);
+            };
+        };
+    }
+
+    public fun update_object_position<T: copy + drop + store>(
+        tree: &mut QuadTree<T>,
+        id: T,
+        object_type: u8,
+        old_x: u64,
+        old_y: u64,
+        new_x: u64,
+        new_y: u64
+    ) {
+        remove_object(tree, id, object_type, old_x, old_y);
+        insert_object(tree, id, object_type, new_x, new_y);
+    }
+
+    public fun drop_quad_tree<T: copy + drop + store>(tree: QuadTree<T>) {
+        let QuadTree { nodes, next_node_id: _, root:_, width: _, height: _ } = tree;
+        table::drop(nodes);
+    }
+
+    // Add these new public functions
+    public fun get_object_entry_id<T: copy + drop + store>(entry: &ObjectEntry<T>): T {
+        entry.id
+    }
+
+    public fun get_object_entry_type<T: copy + drop + store>(entry: &ObjectEntry<T>): u8 {
+        entry.object_type
+    }
+}
