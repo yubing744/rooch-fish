@@ -35,6 +35,9 @@ module rooch_fish::pond {
     const OBJECT_TYPE_FISH: u8 = 1;
     const OBJECT_TYPE_FOOD: u8 = 2;
 
+    const MAX_FOOD_PER_FEED: u64 = 20; // Maximum number of food items created per feed
+    const FOOD_VALUE_RATIO: u64 = 10; // Food value is 1/10 of the fish purchase price
+
     struct ExitZone has store, copy, drop {
         x: u64,
         y: u64,
@@ -166,22 +169,34 @@ module rooch_fish::pond {
 
     public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u256) {
         let account_addr = signer::address_of(account);
-        let coin = account_coin_store::withdraw(account, amount);
+        // Calculate the value of each food item
+        let food_value = pond_state.purchase_amount / (FOOD_VALUE_RATIO as u256);
+        // Determine the number of food items to create, capped at MAX_FOOD_PER_FEED
+        let food_count = u256::min(amount / food_value, (MAX_FOOD_PER_FEED as u256));
+        
+        // Calculate the actual amount to be deducted
+        let actual_amount = food_count * food_value;
+        // Withdraw the actual amount from the user's account
+        let coin = account_coin_store::withdraw(account, actual_amount);
+        // Deposit the withdrawn amount into the pond's treasury
         coin_store::deposit(&mut pond_state.treasury.coin_store, coin);
 
-        let food_count = amount / (pond_state.purchase_amount / 100);
         let i = 0;
         while (i < food_count) {
+            // Generate random position for the food
             let (x, y) = utils::random_position(pond_state.width, pond_state.height);
             
             let food_id = pond_state.next_food_id;
             pond_state.next_food_id = pond_state.next_food_id + 1;
+            // Create a new food item
             let food = food::create_food(food_id, 1, x, y);
+            // Add the food to the pond
             add_food(pond_state, food);
             i = i + 1;
         };
 
-        player::add_feed(&mut pond_state.player_list, account_addr, amount);
+        // Record the actual amount fed by the player
+        player::add_feed(&mut pond_state.player_list, account_addr, actual_amount);
     }
 
     #[test_only]
@@ -619,14 +634,22 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 300);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
-        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
+        let food_value = 500 / FOOD_VALUE_RATIO; // 500 is the purchase_amount set in create_pond
+        let feed_amount = (MAX_FOOD_PER_FEED as u256) * (food_value as u256);
 
-        feed_food(pond_state, &account, 100);
-        assert!(get_food_count(pond_state) == 20, 1);
-        assert!(get_total_feed(pond_state) == 100, 2);
+        feed_food(pond_state, &account, feed_amount);
+        
+        assert!(get_food_count(pond_state) == MAX_FOOD_PER_FEED, 1);
+        assert!(get_total_feed(pond_state) == feed_amount, 2);
+
+        let large_feed_amount = feed_amount * 2;
+        feed_food(pond_state, &account, large_feed_amount);
+
+        assert!(get_food_count(pond_state) == MAX_FOOD_PER_FEED * 2, 3);
+        assert!(get_total_feed(pond_state) == feed_amount * 2, 4);
 
         drop_pond(pond_obj);
     }

@@ -2,8 +2,8 @@ module rooch_fish::quad_tree {
     use std::vector;
     use moveos_std::table::{Self, Table};
 
-    const MAX_DEPTH: u8 = 3;
-    const MAX_OBJECTS: u64 = 4;
+    const MAX_DEPTH: u8 = 5;
+    const MAX_OBJECTS: u64 = 2;
 
     struct Point has copy, drop, store {
         x: u64,
@@ -20,6 +20,8 @@ module rooch_fish::quad_tree {
     struct ObjectEntry<T: copy + drop + store> has copy, drop, store {
         id: T,
         object_type: u8,
+        x: u64,
+        y: u64,
     }
 
     struct QuadTreeNode<T: copy + drop + store> has copy, drop, store {
@@ -59,15 +61,12 @@ module rooch_fish::quad_tree {
     }
 
     public fun insert_object<T: copy + drop + store>(tree: &mut QuadTree<T>, id: T, object_type: u8, x: u64, y: u64) {
-        insert_object_recursive(tree, id, object_type, x, y, 0, 0);
+        insert_object_recursive(tree, ObjectEntry { id, object_type, x, y }, 0, 0);
     }
 
     fun insert_object_recursive<T: copy + drop + store>(
         tree: &mut QuadTree<T>,
-        id: T,
-        object_type: u8,
-        x: u64,
-        y: u64,
+        object: ObjectEntry<T>,
         node_id: u64,
         depth: u8
     ) {
@@ -78,24 +77,24 @@ module rooch_fish::quad_tree {
         let node = table::borrow_mut(&mut tree.nodes, node_id);
         if (!node.is_divided) {
             if (vector::length(&node.objects) < MAX_OBJECTS) {
-                vector::push_back(&mut node.objects, ObjectEntry { id, object_type });
+                vector::push_back(&mut node.objects, object);
                 return
             };
             subdivide(tree, node_id);
         };
 
         let node = table::borrow(&tree.nodes, node_id);
-        if (x < node.boundary.x + node.boundary.width / 2) {
-            if (y < node.boundary.y + node.boundary.height / 2) {
-                insert_object_recursive(tree, id, object_type, x, y, node.nw, depth + 1);
+        if (object.x < node.boundary.x + node.boundary.width / 2) {
+            if (object.y < node.boundary.y + node.boundary.height / 2) {
+                insert_object_recursive(tree, object, node.nw, depth + 1);
             } else {
-                insert_object_recursive(tree, id, object_type, x, y, node.sw, depth + 1);
+                insert_object_recursive(tree, object, node.sw, depth + 1);
             };
         } else {
-            if (y < node.boundary.y + node.boundary.height / 2) {
-                insert_object_recursive(tree, id, object_type, x, y, node.ne, depth + 1);
+            if (object.y < node.boundary.y + node.boundary.height / 2) {
+                insert_object_recursive(tree, object, node.ne, depth + 1);
             } else {
-                insert_object_recursive(tree, id, object_type, x, y, node.se, depth + 1);
+                insert_object_recursive(tree, object, node.se, depth + 1);
             };
         };
     }
@@ -180,7 +179,9 @@ module rooch_fish::quad_tree {
         let i = 0;
         while (i < vector::length(&node.objects)) {
             let object_entry = vector::borrow(&node.objects, i);
-            vector::push_back(result, *object_entry);
+            if (is_point_in_rectangle(object_entry.x, object_entry.y, range)) {
+                vector::push_back(result, *object_entry);
+            };
             i = i + 1;
         };
 
@@ -197,6 +198,10 @@ module rooch_fish::quad_tree {
           r2.x + r2.width < r1.x ||
           r2.y > r1.y + r1.height ||
           r2.y + r2.height < r1.y)
+    }
+
+    fun is_point_in_rectangle(x: u64, y: u64, rect: &Rectangle): bool {
+        x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
     }
 
     public fun remove_object<T: copy + drop + store>(tree: &mut QuadTree<T>, id: T, object_type: u8, x: u64, y: u64) {
@@ -216,7 +221,7 @@ module rooch_fish::quad_tree {
             let i = 0;
             while (i < vector::length(&node.objects)) {
                 let object_entry = vector::borrow(&node.objects, i);
-                if (object_entry.id == id && object_entry.object_type == object_type) {
+                if (object_entry.id == id && object_entry.object_type == object_type && object_entry.x == x && object_entry.y == y) {
                     vector::remove(&mut node.objects, i);
                     return
                 };
@@ -258,7 +263,6 @@ module rooch_fish::quad_tree {
         table::drop(nodes);
     }
 
-    // Add these new public functions
     public fun get_object_entry_id<T: copy + drop + store>(entry: &ObjectEntry<T>): T {
         entry.id
     }
@@ -267,8 +271,13 @@ module rooch_fish::quad_tree {
         entry.object_type
     }
 
-    #[test_only]
-    use std::debug;
+    public fun get_object_entry_x<T: copy + drop + store>(entry: &ObjectEntry<T>): u64 {
+        entry.x
+    }
+
+    public fun get_object_entry_y<T: copy + drop + store>(entry: &ObjectEntry<T>): u64 {
+        entry.y
+    }
 
     #[test]
     fun test_create_quad_tree() {
@@ -289,6 +298,18 @@ module rooch_fish::quad_tree {
 
         let result = query_range(&tree, 0, 0, 15, 15);
         assert!(vector::length(&result) == 1, 1);
+
+        let result = query_range(&tree, 5, 5, 10, 10);
+        assert!(vector::length(&result) == 1, 2);
+
+        let result = query_range(&tree, 15, 15, 10, 10);
+        assert!(vector::length(&result) == 1, 3);
+
+        let result = query_range(&tree, 25, 25, 10, 10);
+        assert!(vector::length(&result) == 1, 4);
+
+        let result = query_range(&tree, 40, 40, 10, 10);
+        assert!(vector::length(&result) == 0, 5);
 
         drop_quad_tree(tree);
     }
@@ -332,7 +353,7 @@ module rooch_fish::quad_tree {
     }
 
     #[test]
-    fun test_get_object_entry_id_and_type() {
+    fun test_get_object_entry_functions() {
         let tree = create_quad_tree<u64>(100, 100);
         
         insert_object(&mut tree, 1, 2, 10, 10);
@@ -343,6 +364,8 @@ module rooch_fish::quad_tree {
         let entry = vector::borrow(&result, 0);
         assert!(get_object_entry_id(entry) == 1, 1);
         assert!(get_object_entry_type(entry) == 2, 2);
+        assert!(get_object_entry_x(entry) == 10, 3);
+        assert!(get_object_entry_y(entry) == 10, 4);
 
         drop_quad_tree(tree);
     }
