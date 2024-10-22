@@ -10,6 +10,7 @@ module rooch_fish::rooch_fish {
     use rooch_fish::player::{Self, PlayerList};
 
     const ERR_INVALID_POND_ID: u64 = 1;
+    const ERR_ALREADY_INITIALIZED: u64 = 2;
 
     struct PondConfig has copy, drop {
         id: u64,
@@ -29,6 +30,9 @@ module rooch_fish::rooch_fish {
     public entry fun init_world(account: &signer) {
         let admin = signer::address_of(account);
         let module_signer = signer::module_signer<GameState>();
+
+        // Check if GameState already exists
+        assert!(!account::exists_resource<GameState>(@rooch_fish), ERR_ALREADY_INITIALIZED);
 
         let ponds = table::new();
 
