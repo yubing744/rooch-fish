@@ -1,10 +1,10 @@
-# RoochFish 合约技术方案
+# RoochFish 合约技术方案（更新版）
 
 ## 1. 需求描述
 
 ### 1.1 项目背景
 
-RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通过购买和控制虚拟鱼在一个动态的鱼塘中进行竞争。游戏结合了成长、策略和经济元素，旨在为玩家提供有趣且具有经济激励的游戏体验。
+RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通过购买和控制虚拟鱼在多个动态鱼塘中进行竞争。游戏结合了成长、策略和经济元素，旨在为玩家提供有趣且具有经济激励的游戏体验。
 
 ### 1.2 功能概述
 
@@ -13,6 +13,8 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 - **投喂食物**：玩家可以使用 RGAS 代币向鱼塘投喂食物，食物在鱼塘中随机生成位置。
 - **分成机制**：投喂食物的玩家在鱼销毁时可以获得一定比例的分成。
 - **鱼的销毁和奖励**：鱼可以移动到出口位置进行销毁，玩家根据鱼的大小获得 RGAS 代币奖励。
+- **最大鱼大小限制**：鱼达到最大大小时会"撑死"并转化为食物。
+- **新鱼保护机制**：新生鱼在1分钟内不能被其他鱼吃掉。
 
 ### 1.3 非功能需求
 
@@ -37,6 +39,7 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 - 玩家需要一种方式使用 RGAS 代币购买鱼。
 - 鱼在购买后，需要在鱼塘中随机生成位置。
 - 鱼具有初始大小和其他属性。
+- 新生鱼有1分钟的保护期。
 
 #### 2.2.2 鱼的移动和成长
 
@@ -45,6 +48,7 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
   - 吃掉比自己小的鱼。
   - 吃掉鱼塘中的食物。
 - 鱼的大小影响其能吃掉哪些鱼和奖励多少代币。
+- 鱼有最大大小限制，达到后会"撑死"并转化为食物。
 
 #### 2.2.3 投喂食物
 
@@ -63,13 +67,14 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 - 鱼可以移动到出口位置进行销毁。
 - 玩家根据鱼的大小获得 RGAS 代币奖励。
 - 奖励需要从某个资金池或合约余额中支付。
+- 1% 的奖励分配给开发者。
 
 ### 2.3 技术需求
 
 - **随机数生成**：用于鱼和食物的随机位置生成。
 - **状态管理**：记录鱼、食物、玩家投喂记录等状态。
 - **对象系统**：使用 Move 的对象系统管理游戏实体。
-- **时间操作**：可能需要记录时间戳，防止某些时间攻击。
+- **时间操作**：记录时间戳，用于新鱼保护机制。
 - **安全措施**：防止重入攻击、溢出等常见智能合约漏洞。
 
 ## 3. 概要设计
@@ -90,6 +95,7 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
   - 大小（u64）
   - 位置（x, y 坐标）
   - 唯一标识符（id）
+  - 创建时间戳
 - **Food**：
   - 大小（固定值）
   - 位置（x, y 坐标）
@@ -97,6 +103,7 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 - **PondState**：
   - 鱼列表（映射或向量）
   - 食物列表（映射或向量）
+  - 最大鱼大小限制
 - **PlayerState**：
   - 投喂食物数量
   - 累计分成
@@ -108,6 +115,7 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 - **吃鱼和食物**：在移动后，检查当前位置是否有可吃的鱼或食物，更新大小和状态。
 - **投喂食物**：玩家调用投喂函数，扣除 RGAS 代币，生成新的 Food 对象并添加到 PondState 中，记录投喂数量。
 - **鱼的销毁**：当鱼移动到出口位置，调用销毁函数，计算并发放奖励，销毁 Fish 对象，结算投喂玩家的分成。
+- **鱼的"撑死"**：检查鱼是否达到最大大小，如果是，则将其转化为食物。
 
 ## 4. 详细设计
 
@@ -144,11 +152,13 @@ module <ADDR>::Fish {
         owner: address,
         size: u64,
         position: (u64, u64),
+        created_at: u64,
     }
 
     public fun new(owner: address, id: u64, ctx: &mut TxContext): Object<Self::Fish>;
     public fun move(fish: &mut Self::Fish, direction: u8);
     public fun grow(fish: &mut Self::Fish, amount: u64);
+    public fun is_protected(fish: &Self::Fish, current_time: u64): bool;
 }
 ```
 
@@ -180,6 +190,7 @@ module <ADDR>::Pond {
     struct PondState has key {
         fishes: vector<Object<Fish::Fish>>,
         foods: vector<Object<Food::Food>>,
+        max_fish_size: u64,
     }
 
     public fun add_fish(fish: Object<Fish::Fish>);
@@ -187,6 +198,7 @@ module <ADDR>::Pond {
     public fun add_food(food: Object<Food::Food>);
     public fun remove_food(food_id: u64);
     public fun get_state(): &mut Self::PondState;
+    public fun check_and_handle_overgrown_fish();
 }
 ```
 
@@ -215,6 +227,7 @@ module <ADDR>::Utils {
     use moveos_std::simple_rng;
 
     public fun random_position(): (u64, u64);
+    public fun current_timestamp(): u64;
 }
 ```
 
@@ -230,7 +243,8 @@ public entry fun purchase_fish(ctx: &mut TxContext) {
     // 生成新的鱼
     let fish_id = generate_unique_id();
     let position = Utils::random_position();
-    let fish = Fish::new(ctx.sender(), fish_id, initial_size, position, ctx);
+    let created_at = Utils::current_timestamp();
+    let fish = Fish::new(ctx.sender(), fish_id, initial_size, position, created_at, ctx);
 
     // 将鱼添加到鱼塘
     Pond::add_fish(fish);
@@ -250,6 +264,11 @@ public entry fun move_fish(fish_id: u64, direction: u8, ctx: &mut TxContext) {
 
     // 检查当前位置是否有可吃的鱼或食物
     handle_collisions(&mut fish, ctx);
+
+    // 检查是否达到最大大小
+    if fish.size >= Pond::get_state().max_fish_size {
+        handle_overgrown_fish(fish);
+    }
 }
 ```
 
@@ -286,7 +305,10 @@ public entry fun destroy_fish(fish_id: u64, ctx: &mut TxContext) {
     let reward = calculate_reward(fish.size);
 
     // 分发奖励
-    coin::mint<RGAS>(ctx.sender(), reward);
+    let dev_reward = reward / 100; // 1% 给开发者
+    let player_reward = reward - dev_reward;
+    coin::mint<RGAS>(DEVELOPER_ADDRESS, dev_reward);
+    coin::mint<RGAS>(ctx.sender(), player_reward);
 
     // 结算投喂玩家的分成
     distribute_rewards(fish.size);
@@ -308,14 +330,18 @@ public fun random_position(): (u64, u64) {
 }
 ```
 
+好的，我们继续从4.3.2开始：
+
 #### 4.3.2 碰撞处理
 
 ```move
 fun handle_collisions(fish: &mut Fish::Fish, ctx: &mut TxContext) {
+    let current_time = Utils::current_timestamp();
+
     // 检查是否有可吃的鱼
     for other_fish in Pond::get_state().fishes {
         if fish.id != other_fish.id && fish.position == other_fish.position {
-            if fish.size > other_fish.size {
+            if fish.size > other_fish.size && !Fish::is_protected(other_fish, current_time) {
                 // 吃掉其他鱼
                 fish.size += other_fish.size;
                 Pond::remove_fish(other_fish.id);
@@ -334,7 +360,24 @@ fun handle_collisions(fish: &mut Fish::Fish, ctx: &mut TxContext) {
 }
 ```
 
-#### 4.3.3 奖励和分成计算
+#### 4.3.3 处理超大鱼
+
+```move
+fun handle_overgrown_fish(fish: &Fish::Fish) {
+    // 将鱼转化为10份食物
+    for _ in 0..10 {
+        let food_id = generate_unique_id();
+        let position = Utils::random_position();
+        let food = Food::new(food_id, fish.size / 10, position, ctx);
+        Pond::add_food(food);
+    }
+
+    // 从鱼塘中移除鱼
+    Pond::remove_fish(fish.id);
+}
+```
+
+#### 4.3.4 奖励和分成计算
 
 ```move
 fun calculate_reward(size: u64): u64 {
@@ -350,6 +393,14 @@ fun distribute_rewards(fish_size: u64) {
         let share = (player.feed_amount / total_feed) * fish_size * reward_ratio;
         Player::add_reward(player.owner, share);
     }
+}
+```
+
+#### 4.3.5 新鱼保护机制
+
+```move
+public fun is_protected(fish: &Fish::Fish, current_time: u64): bool {
+    current_time - fish.created_at < 60 // 60秒保护期
 }
 ```
 
@@ -400,20 +451,28 @@ fun distribute_rewards(fish_size: u64) {
   1. 玩家控制鱼移动到出口位置。
   2. 调用 `destroy_fish`。
   3. 检查玩家是否获得正确的奖励代币。
-  4. 检查鱼是否从鱼塘中移除。
-  5. 检查投喂玩家是否获得分成。
+  4. 检查开发者是否获得1%的奖励。
+  5. 检查鱼是否从鱼塘中移除。
+  6. 检查投喂玩家是否获得分成。
 - **预期结果**：奖励和分成正确发放，鱼正确销毁。
 
-#### 测试用例 5：尝试吃比自己大的鱼
+#### 测试用例 5：新鱼保护机制
 
 - **步骤**：
-  1. 创建两条鱼，A 和 B，B 比 A 大。
-  2. 控制 A 移动到 B 的位置。
-  3. 调用 `move_fish`。
-  4. 检查鱼的状态。
-- **预期结果**：A 不能吃掉 B，鱼的状态不变。
+  1. 创建一条新鱼。
+  2. 尝试用另一条大鱼在1分钟内吃掉新鱼。
+  3. 等待1分钟后再次尝试。
+- **预期结果**：1分钟内新鱼不能被吃掉，1分钟后可以被吃掉。
 
-#### 测试用例 6：安全性测试
+#### 测试用例 6：鱼达到最大大小
+
+- **步骤**：
+  1. 创建一条鱼并使其不断成长。
+  2. 当鱼达到最大大小时，移动鱼。
+  3. 检查鱼是否转化为食物。
+- **预期结果**：鱼成功转化为10份食物，原鱼从鱼塘中移除。
+
+#### 测试用例 7：安全性测试
 
 - **步骤**：
   1. 模拟非所有者尝试移动或销毁其他玩家的鱼。
@@ -429,3 +488,28 @@ fun distribute_rewards(fish_size: u64) {
 
 - 记录每个测试用例的执行结果。
 - 对于失败的测试，分析原因并修复代码。
+
+## 6. 安全性考虑
+
+- 实现访问控制，确保只有鱼的所有者可以控制和销毁鱼。
+- 使用安全的随机数生成方法，防止预测攻击。
+- 实现交易限制，防止短时间内的大量操作。
+- 仔细处理数学计算，防止整数溢出。
+- 实现紧急暂停机制，以应对潜在的安全问题。
+
+## 7. 性能优化
+
+- 优化数据结构，使用适当的集合类型来存储鱼和食物。
+- 实现批量处理机制，减少交易次数。
+- 使用链下计算和链上验证的模式来处理复杂的逻辑。
+
+## 8. 未来扩展
+
+- 实现多个鱼塘，每个鱼塘有不同的规则和奖励机制。
+- 添加特殊能力或道具系统，增加游戏的策略性。
+- 实现排行榜和成就系统，增加游戏的社交性和竞争性。
+- 考虑实现跨链功能，允许不同区块链上的玩家参与游戏。
+
+## 9. 结论
+
+本技术方案详细描述了 RoochFish 游戏的实现细节，包括核心功能、数据结构、关键算法和测试策略。通过这个设计，我们可以实现一个安全、高效且有趣的区块链游戏。在实际开发过程中，可能需要根据具体情况进行调整和优化。
