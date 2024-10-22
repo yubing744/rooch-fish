@@ -103,8 +103,8 @@ module rooch_fish::rooch_fish {
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
         let pond_state = object::borrow_mut(pond_obj);
 
-        pond::feed_food(pond_state, account, amount);
-        player::add_feed(&mut game_state.player_list, account_addr, amount);
+        let actual_amount = pond::feed_food(pond_state, account, amount);
+        player::add_feed(&mut game_state.player_list, account_addr, actual_amount);
     }
 
     public entry fun destroy_fish(account: &signer, pond_id: u64, fish_id: u64) {
@@ -168,7 +168,7 @@ module rooch_fish::rooch_fish {
         table::length(&game_state.ponds)
     }
 
-    public fun get_pond_info(pond_id: u64): (u64, u64, u64, u256) {
+    public fun get_pond_info(pond_id: u64): (u64, u64, u64, u256, u64, u64) {
         let game_state = account::borrow_resource<GameState>(@rooch_fish);
         assert!(table::contains(&game_state.ponds, pond_id), ERR_INVALID_POND_ID);
         let pond_obj = table::borrow(&game_state.ponds, pond_id);
@@ -177,7 +177,9 @@ module rooch_fish::rooch_fish {
             pond::get_width(pond_state),
             pond::get_height(pond_state),
             pond::get_max_fish_count(pond_state),
-            pond::get_purchase_amount(pond_state)
+            pond::get_purchase_amount(pond_state),
+            pond::get_max_food_per_feed(),
+            pond::get_food_value_ratio(),
         )
     }
 

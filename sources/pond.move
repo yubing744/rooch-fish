@@ -1,7 +1,6 @@
 module rooch_fish::pond {
     use std::vector;
     use std::u256;
-    use std::string;
 
     use moveos_std::object::{Self, Object};
     use moveos_std::signer;
@@ -15,9 +14,6 @@ module rooch_fish::pond {
     use rooch_fish::utils;
     use rooch_fish::player::{Self, PlayerList};
     use rooch_fish::quad_tree;
-
-    #[test_only]
-    use std::debug;
 
     friend rooch_fish::rooch_fish;
 
@@ -167,12 +163,12 @@ module rooch_fish::pond {
         fish::move_fish_to_for_test(fish, x, y);
     }
 
-    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u256) {
+    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u256) : u256 {
         let account_addr = signer::address_of(account);
         // Calculate the value of each food item
         let food_value = pond_state.purchase_amount / (FOOD_VALUE_RATIO as u256);
         // Determine the number of food items to create, capped at MAX_FOOD_PER_FEED
-        let food_count = u256::min(amount / food_value, (MAX_FOOD_PER_FEED as u256));
+        let food_count = u256::min(u256::divide_and_round_up(amount, food_value), (MAX_FOOD_PER_FEED as u256));
         
         // Calculate the actual amount to be deducted
         let actual_amount = food_count * food_value;
@@ -197,6 +193,8 @@ module rooch_fish::pond {
 
         // Record the actual amount fed by the player
         player::add_feed(&mut pond_state.player_list, account_addr, actual_amount);
+
+        actual_amount
     }
 
     #[test_only]
@@ -319,9 +317,6 @@ module rooch_fish::pond {
     }
 
     fun handle_collisions(pond_state: &mut PondState, fish_id: u64) {
-        debug::print(&string::utf8(b"handle_collisions start fish_id:"));
-        debug::print(&fish_id);
-
         let fish = get_fish(pond_state, fish_id);
         let fish_size = fish::get_size(fish);
         let (fish_x, fish_y) = fish::get_position(fish);
@@ -334,10 +329,6 @@ module rooch_fish::pond {
             query_range * 2,
             query_range * 2,
         );
-
-        let nearby_objects_count = vector::length(&nearby_objects);
-        debug::print(&string::utf8(b"handle_collisions nearby_objects:"));
-        debug::print(&nearby_objects_count);
 
         let nearby_fish = vector::empty();
         let nearby_food = vector::empty();
@@ -356,9 +347,6 @@ module rooch_fish::pond {
 
         handle_food_collisions(pond_state, fish_id, fish_size, fish_x, fish_y, nearby_food);
         handle_fish_collisions(pond_state, fish_id, fish_size, fish_x, fish_y, nearby_fish);
-
-        debug::print(&string::utf8(b"handle_collisions end fish_id:"));
-        debug::print(&fish_id);
     }
 
     fun handle_food_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64, nearby_food: vector<u64>) {
@@ -500,6 +488,14 @@ module rooch_fish::pond {
 
     public fun get_total_feed(pond_state: &PondState): u256 {
         player::get_total_feed(&pond_state.player_list)
+    }
+
+    public fun get_max_food_per_feed(): u64 {
+        MAX_FOOD_PER_FEED
+    }
+
+    public fun get_food_value_ratio(): u64 {
+        FOOD_VALUE_RATIO
     }
 
     public(friend) fun drop_pond(pond: Object<PondState>) {

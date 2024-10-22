@@ -2,6 +2,7 @@
 module rooch_fish::fish_lifecycle_test {
     use std::signer;
     use std::vector;
+    use std::u64;
 
     use rooch_framework::genesis;
     use rooch_framework::gas_coin;
@@ -10,7 +11,7 @@ module rooch_fish::fish_lifecycle_test {
     use rooch_fish::rooch_fish;
 
     const POND_ID: u64 = 0;
-    const INITIAL_BALANCE: u256 = 1000000000; // 1000 RGAS
+    const INITIAL_BALANCE: u256 = 1000000000000; // 10000 RGAS
 
     #[test(admin = @rooch_fish, player = @0x42)]
     fun test_fish_lifecycle(admin: signer, player: signer) {
@@ -39,10 +40,21 @@ module rooch_fish::fish_lifecycle_test {
         rooch_fish::move_fish(&player, POND_ID, fish_id, 1); // Move right
         
         // Feed the fish
-        rooch_fish::feed_food(&player, POND_ID, 10);
+        let feed_amount = 1000000; // 0.01 RGAS
+        rooch_fish::feed_food(&player, POND_ID, feed_amount);
+        
+        // Get pond info
+        let (_, _, _, purchase_amount, max_food_per_feed, food_value_ratio) = rooch_fish::get_pond_info(POND_ID);
+        
+        // Calculate the food value
+        let food_value = purchase_amount / (food_value_ratio as u256);
+        
+        // Calculate the expected number of food items
+        let expected_food_count = u64::min(((feed_amount / food_value) as u64), max_food_per_feed);
+        let expected_feed_amount = (expected_food_count as u256) * food_value;
         
         // Verify total feed increased
-        assert!(rooch_fish::get_pond_total_feed(POND_ID) == 10, 3);
+        assert!(rooch_fish::get_pond_total_feed(POND_ID) == expected_feed_amount, 3);
         
         // Set fish position to exit zone for testing
         rooch_fish::set_fish_position_for_test(POND_ID, fish_id, 50, 50);

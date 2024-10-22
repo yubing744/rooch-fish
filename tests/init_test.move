@@ -37,7 +37,7 @@ module rooch_fish::init_test {
         // Verify each pond's configuration
         let i = 0;
         while (i < 8) {
-            let (width, height, max_fish_count, purchase_amount) = rooch_fish::get_pond_info((i as u64));
+            let (width, height, max_fish_count, purchase_amount,_,_) = rooch_fish::get_pond_info((i as u64));
             let expected_config = vector::borrow(&expected_configs, i);
             
             assert!(width == expected_config.width, 1);
