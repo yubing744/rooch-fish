@@ -1,4 +1,4 @@
-# RoochFish 合约技术方案（更新版）
+# RoochFish 合约技术方案（完整版）
 
 ## 1. 需求描述
 
@@ -59,23 +59,17 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
 #### 2.2.4 分成机制
 
 - 投喂食物的玩家在鱼销毁时获得分成。
-- 分成比例根据投喂的食物数量和鱼的大小计算。
+- 分成比例为鱼销毁总奖励的20%，根据投喂的食物数量按比例分配。
 - 需要记录每个玩家投喂的食物数量。
 
 #### 2.2.5 鱼的销毁和奖励
 
 - 鱼可以移动到出口位置进行销毁。
 - 玩家根据鱼的大小获得 RGAS 代币奖励。
-- 奖励需要从某个资金池或合约余额中支付。
-- 1% 的奖励分配给开发者。
-
-### 2.3 技术需求
-
-- **随机数生成**：用于鱼和食物的随机位置生成。
-- **状态管理**：记录鱼、食物、玩家投喂记录等状态。
-- **对象系统**：使用 Move 的对象系统管理游戏实体。
-- **时间操作**：记录时间戳，用于新鱼保护机制。
-- **安全措施**：防止重入攻击、溢出等常见智能合约漏洞。
+- 奖励分配：
+  - 1% 分配给开发者
+  - 79% 分配给鱼的所有者
+  - 20% 分配给投喂食物的玩家
 
 ## 3. 概要设计
 
@@ -96,10 +90,12 @@ RoochFish 是一款基于 Rooch 区块链平台的多人在线游戏。玩家通
   - 位置（x, y 坐标）
   - 唯一标识符（id）
   - 创建时间戳
+  - 食物来源记录（投喂玩家地址和数量的映射）
 - **Food**：
   - 大小（固定值）
   - 位置（x, y 坐标）
   - 唯一标识符（id）
+  - 投喂者地址
 - **PondState**：
   - 鱼列表（映射或向量）
   - 食物列表（映射或向量）
@@ -153,11 +149,12 @@ module <ADDR>::Fish {
         size: u64,
         position: (u64, u64),
         created_at: u64,
+        food_sources: vector<(address, u64)>,
     }
 
     public fun new(owner: address, id: u64, ctx: &mut TxContext): Object<Self::Fish>;
     public fun move(fish: &mut Self::Fish, direction: u8);
-    public fun grow(fish: &mut Self::Fish, amount: u64);
+    public fun grow(fish: &mut Self::Fish, amount: u64, feeder: address);
     public fun is_protected(fish: &Self::Fish, current_time: u64): bool;
 }
 ```
@@ -173,9 +170,10 @@ module <ADDR>::Food {
         id: u64,
         size: u64,
         position: (u64, u64),
+        feeder: address,
     }
 
-    public fun new(id: u64, ctx: &mut TxContext): Object<Self::Food>;
+    public fun new(id: u64, feeder: address, ctx: &mut TxContext): Object<Self::Food>;
 }
 ```
 
@@ -283,10 +281,10 @@ public entry fun feed_food(amount: u64, ctx: &mut TxContext) {
     Player::add_feed(ctx.sender(), amount);
 
     // 生成新的食物
-    for i in 0..amount {
+    for _ in 0..amount {
         let food_id = generate_unique_id();
         let position = Utils::random_position();
-        let food = Food::new(food_id, position, ctx);
+        let food = Food::new(food_id, ctx.sender(), position, ctx);
         Pond::add_food(food);
     }
 }
@@ -301,17 +299,11 @@ public entry fun destroy_fish(fish_id: u64, ctx: &mut TxContext) {
     assert!(fish.owner == ctx.sender(), ErrorFishNotOwned);
     assert!(is_at_exit(fish.position), ErrorNotAtExit);
 
-    // 计算奖励
-    let reward = calculate_reward(fish.size);
+    // 计算总奖励
+    let total_reward = calculate_reward(fish.size);
 
     // 分发奖励
-    let dev_reward = reward / 100; // 1% 给开发者
-    let player_reward = reward - dev_reward;
-    coin::mint<RGAS>(DEVELOPER_ADDRESS, dev_reward);
-    coin::mint<RGAS>(ctx.sender(), player_reward);
-
-    // 结算投喂玩家的分成
-    distribute_rewards(fish.size);
+    distribute_rewards(&fish, total_reward);
 
     // 从鱼塘中移除鱼
     Pond::remove_fish(fish_id);
@@ -329,8 +321,6 @@ public fun random_position(): (u64, u64) {
     (x, y)
 }
 ```
-
-好的，我们继续从4.3.2开始：
 
 #### 4.3.2 碰撞处理
 
@@ -353,7 +343,7 @@ fun handle_collisions(fish: &mut Fish::Fish, ctx: &mut TxContext) {
     for food in Pond::get_state().foods {
         if fish.position == food.position {
             // 吃掉食物
-            fish.size += food.size;
+            Fish::grow(fish, food.size, food.feeder);
             Pond::remove_food(food.id);
         }
     }
@@ -368,7 +358,7 @@ fun handle_overgrown_fish(fish: &Fish::Fish) {
     for _ in 0..10 {
         let food_id = generate_unique_id();
         let position = Utils::random_position();
-        let food = Food::new(food_id, fish.size / 10, position, ctx);
+        let food = Food::new(food_id, fish.size / 10, position, fish.owner, ctx);
         Pond::add_food(food);
     }
 
@@ -384,15 +374,34 @@ fun calculate_reward(size: u64): u64 {
     base_reward * size
 }
 
-fun distribute_rewards(fish_size: u64) {
-    // 计算总的投喂量
-    let total_feed = get_total_feed();
+fun distribute_rewards(fish: &Fish::Fish, total_reward: u64) {
+    let dev_reward = total_reward / 100; // 1% 给开发者
+    let owner_reward = total_reward * 79 / 100; // 79% 给鱼的所有者
+    let feeder_reward = total_reward * 20 / 100; // 20% 分配给投喂食物的玩家
 
-    // 给每个投喂玩家分发比例奖励
-    for player in get_all_players() {
-        let share = (player.feed_amount / total_feed) * fish_size * reward_ratio;
-        Player::add_reward(player.owner, share);
+    // 给开发者分配奖励
+    coin::mint<RGAS>(DEVELOPER_ADDRESS, dev_reward);
+
+    // 给鱼的所有者分配奖励
+    coin::mint<RGAS>(fish.owner, owner_reward);
+
+    // 计算鱼吃掉的总食物量
+    let total_food_eaten = calculate_total_food_eaten(fish);
+
+    // 给每个投喂食物的玩家分发比例奖励
+    for (player, food_amount) in fish.food_sources {
+        let share = (food_amount * feeder_reward) / total_food_eaten;
+        Player::add_reward(player, share);
     }
+}
+
+// 计算鱼吃掉的总食物量
+fun calculate_total_food_eaten(fish: &Fish::Fish): u64 {
+    let total = 0;
+    for (_, amount) in fish.food_sources {
+        total += amount;
+    }
+    total
 }
 ```
 
@@ -453,7 +462,7 @@ public fun is_protected(fish: &Fish::Fish, current_time: u64): bool {
   3. 检查玩家是否获得正确的奖励代币。
   4. 检查开发者是否获得1%的奖励。
   5. 检查鱼是否从鱼塘中移除。
-  6. 检查投喂玩家是否获得分成。
+  6. 检查投喂玩家是否获得正确的分成。
 - **预期结果**：奖励和分成正确发放，鱼正确销毁。
 
 #### 测试用例 5：新鱼保护机制
