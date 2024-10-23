@@ -17,7 +17,12 @@ build:
 # 发布合约
 publish:
 	@echo "Publishing the Move package..."
-	rooch client publish --path $(PACKAGE_PATH) --gas-budget $(GAS_BUDGET) --named-addresses rooch_fish=default
+	rooch move publish --path $(PACKAGE_PATH) --named-addresses rooch_fish=default
+
+# 初始化游戏世界
+init-world:
+	@echo "Init RoochFish world..."
+	rooch move run --function  0xf98449f0d0fd7e52ee1a9fa3304f1fb31d133611df4dc3703dab547208254f0::rooch_fish::init_world --json
 
 # 测试合约
 debug:
