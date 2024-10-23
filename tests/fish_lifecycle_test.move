@@ -3,12 +3,13 @@ module rooch_fish::fish_lifecycle_test {
     use std::signer;
     use std::vector;
     use std::u64;
+    use moveos_std::object;
 
     use rooch_framework::genesis;
     use rooch_framework::gas_coin;
 
     use rooch_fish::player;
-    use rooch_fish::rooch_fish;
+    use rooch_fish::rooch_fish::{Self, GameState};
 
     const POND_ID: u64 = 0;
     const INITIAL_BALANCE: u256 = 1000000000000; // 10000 RGAS
@@ -22,29 +23,33 @@ module rooch_fish::fish_lifecycle_test {
         let player_addr = signer::address_of(&player);
         gas_coin::faucet_for_test(player_addr, INITIAL_BALANCE);
 
+        // Get GameState object
+        let game_state_id = object::named_object_id<GameState>();
+        let game_state_obj = object::borrow_mut_object_shared<GameState>(game_state_id);
+
         // Purchase a fish
-        rooch_fish::purchase_fish(&player, POND_ID);
+        rooch_fish::purchase_fish(&player, game_state_obj, POND_ID);
         
         // Verify fish count increased
-        assert!(rooch_fish::get_pond_player_count(POND_ID) == 1, 1);
+        assert!(rooch_fish::get_pond_player_count(game_state_obj, POND_ID) == 1, 1);
         
         // Get the fish ID
-        let fish_ids = rooch_fish::get_pond_player_fish_ids(POND_ID, player_addr);
+        let fish_ids = rooch_fish::get_pond_player_fish_ids(game_state_obj, POND_ID, player_addr);
         assert!(vector::length(&fish_ids) == 1, 2);
         let fish_id = *vector::borrow(&fish_ids, 0);
         
         // Set fish position for testing
-        rooch_fish::set_fish_position_for_test(POND_ID, fish_id, 25, 25);
+        rooch_fish::set_fish_position_for_test(game_state_obj, POND_ID, fish_id, 25, 25);
         
         // Move the fish
-        rooch_fish::move_fish(&player, POND_ID, fish_id, 1); // Move right
+        rooch_fish::move_fish(&player, game_state_obj, POND_ID, fish_id, 1); // Move right
         
         // Feed the fish
         let feed_amount = 1000000; // 0.01 RGAS
-        rooch_fish::feed_food(&player, POND_ID, feed_amount);
+        rooch_fish::feed_food(&player, game_state_obj, POND_ID, feed_amount);
         
         // Get pond info
-        let (_, _, _, purchase_amount, max_food_per_feed, food_value_ratio) = rooch_fish::get_pond_info(POND_ID);
+        let (_, _, _, purchase_amount, max_food_per_feed, food_value_ratio) = rooch_fish::get_pond_info(game_state_obj, POND_ID);
         
         // Calculate the food value
         let food_value = purchase_amount / (food_value_ratio as u256);
@@ -54,21 +59,22 @@ module rooch_fish::fish_lifecycle_test {
         let expected_feed_amount = (expected_food_count as u256) * food_value;
         
         // Verify total feed increased
-        assert!(rooch_fish::get_pond_total_feed(POND_ID) == expected_feed_amount, 3);
+        assert!(rooch_fish::get_pond_total_feed(game_state_obj, POND_ID) == expected_feed_amount, 3);
         
         // Set fish position to exit zone for testing
-        rooch_fish::set_fish_position_for_test(POND_ID, fish_id, 50, 50);
+        rooch_fish::set_fish_position_for_test(game_state_obj, POND_ID, fish_id, 50, 50);
         
         // Destroy the fish
-        rooch_fish::destroy_fish(&player, POND_ID, fish_id);
+        rooch_fish::destroy_fish(&player, game_state_obj, POND_ID, fish_id);
         
         // Verify fish count decreased
-        let fish_ids = rooch_fish::get_pond_player_fish_ids(POND_ID, player_addr);
+        let fish_ids = rooch_fish::get_pond_player_fish_ids(game_state_obj, POND_ID, player_addr);
         assert!(vector::length(&fish_ids) == 0, 4);
 
         // Verify player received rewards (we can't check the exact amount in this test)
-        let player_list = rooch_fish::get_global_player_list();
+        let player_list = rooch_fish::get_global_player_list(game_state_obj);
         let player_reward = player::get_player_reward(player_list, player_addr);
         assert!(player_reward > 0, 5);
     }
 }
+

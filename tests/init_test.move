@@ -1,8 +1,9 @@
 // tests/init_test.move
 module rooch_fish::init_test {
     use std::vector;
+    use moveos_std::object::{Self, ObjectID};
     use rooch_framework::genesis;
-    use rooch_fish::rooch_fish;
+    use rooch_fish::rooch_fish::{Self, GameState};
 
     struct PondConfig has drop {
         width: u64,
@@ -18,9 +19,13 @@ module rooch_fish::init_test {
 
         // Initialize the game world
         rooch_fish::init_world(&admin);
+        
+        // Get GameState object
+        let game_state_id = object::named_object_id<GameState>();
+        let game_state_obj = object::borrow_mut_object_shared<GameState>(game_state_id);
 
         // Verify the number of ponds
-        assert!(rooch_fish::get_pond_count() == 8, 0);
+        assert!(rooch_fish::get_pond_count(game_state_obj) == 8, 0);
 
         // Define expected pond configurations
         let expected_configs = vector[
@@ -37,7 +42,7 @@ module rooch_fish::init_test {
         // Verify each pond's configuration
         let i = 0;
         while (i < 8) {
-            let (width, height, max_fish_count, purchase_amount,_,_) = rooch_fish::get_pond_info((i as u64));
+            let (width, height, max_fish_count, purchase_amount,_,_) = rooch_fish::get_pond_info(game_state_obj, (i as u64));
             let expected_config = vector::borrow(&expected_configs, i);
             
             assert!(width == expected_config.width, 1);
@@ -49,7 +54,8 @@ module rooch_fish::init_test {
         };
 
         // Verify global player count and total feed
-        assert!(rooch_fish::get_global_player_count() == 0, 5);
-        assert!(rooch_fish::get_global_total_feed() == 0, 6);
+        assert!(rooch_fish::get_global_player_count(game_state_obj) == 0, 5);
+        assert!(rooch_fish::get_global_total_feed(game_state_obj) == 0, 6);
     }
 }
+
