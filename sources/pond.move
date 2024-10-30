@@ -1,5 +1,6 @@
 module rooch_fish::pond {
     use std::vector;
+    use std::u64;
     use std::u256;
 
     use moveos_std::object::{Self, Object};
@@ -157,17 +158,25 @@ module rooch_fish::pond {
         (new_x, new_y)
     }
 
-    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, amount: u256) : u256 {
+    public(friend) fun feed_food(pond_state: &mut PondState, account: &signer, count: u64) : u256 {
         let account_addr = signer::address_of(account);
-        let food_value = pond_state.purchase_amount / (FOOD_VALUE_RATIO as u256);
-        let food_count = u256::min(u256::divide_and_round_up(amount, food_value), (MAX_FOOD_PER_FEED as u256));
         
-        let actual_amount = food_count * food_value;
-        let coin = account_coin_store::withdraw(account, actual_amount);
+        // Ensure food count does not exceed limits
+        let actual_count = u64::min(count, MAX_FOOD_PER_FEED);
+        assert!(pond_state.food_count + actual_count <= pond_state.max_food_count, ERR_MAX_FOOD_COUNT_REACHED);
+        
+        // Calculate actual cost
+        let food_value = pond_state.purchase_amount / (FOOD_VALUE_RATIO as u256);
+        let total_cost = (actual_count as u256) * food_value;
+        
+        // Verify and transfer payment
+        assert!(gas_coin::balance(account_addr) >= total_cost, ERR_INSUFFICIENT_BALANCE);
+        let coin = account_coin_store::withdraw(account, total_cost);
         coin_store::deposit(&mut pond_state.treasury.coin_store, coin);
 
+        // Create food objects
         let i = 0;
-        while (i < food_count) {
+        while (i < actual_count) {
             let (x, y) = utils::random_position(pond_state.width, pond_state.height);
             
             let food_id = pond_state.next_food_id;
@@ -177,9 +186,9 @@ module rooch_fish::pond {
             i = i + 1;
         };
 
-        player::add_feed(&mut pond_state.player_list, account_addr, actual_amount);
+        player::add_feed(&mut pond_state.player_list, account_addr, total_cost);
 
-        actual_amount
+        total_cost
     }
 
     public(friend) fun destroy_fish(pond_state: &mut PondState, account: &signer, fish_id: u64): u256 {
@@ -522,10 +531,6 @@ module rooch_fish::pond {
 
     #[test_only]
     use rooch_framework::genesis;
-    #[test_only]
-    use std::debug;
-    #[test_only]
-    use std::string;
 
     #[test]
     fun test_create_pond() {
@@ -609,18 +614,18 @@ module rooch_fish::pond {
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let food_value = 500 / FOOD_VALUE_RATIO;
-        let feed_amount = (MAX_FOOD_PER_FEED as u256) * (food_value as u256);
+        let feed_count = MAX_FOOD_PER_FEED;
 
-        feed_food(pond_state, &account, feed_amount);
+        let total_cost = feed_food(pond_state, &account, feed_count);
         
-        assert!(get_food_count(pond_state) == MAX_FOOD_PER_FEED, 1);
-        assert!(get_total_feed(pond_state) == feed_amount, 2);
+        assert!(get_food_count(pond_state) == feed_count, 1);
+        assert!(get_total_feed(pond_state) == (feed_count as u256) * (food_value as u256), 2);
 
-        let large_feed_amount = feed_amount * 2;
-        feed_food(pond_state, &account, large_feed_amount);
+        let large_feed_count = MAX_FOOD_PER_FEED * 2;
+        let second_total_cost = feed_food(pond_state, &account, large_feed_count);
 
         assert!(get_food_count(pond_state) == MAX_FOOD_PER_FEED * 2, 3);
-        assert!(get_total_feed(pond_state) == feed_amount * 2, 4);
+        assert!(get_total_feed(pond_state) == total_cost + second_total_cost, 4);
 
         drop_pond(pond_obj);
     }
@@ -724,16 +729,12 @@ module rooch_fish::pond {
         move_fish_to_for_test(pond_state, fish_id, 25, 25);
         
         let initial_fish_size = fish::get_size(get_fish(pond_state, fish_id));
-        debug::print(&string::utf8(b"initial_fish_size:"));
-        debug::print(&initial_fish_size);
 
-        feed_food(pond_state, &account, 500);
+        feed_food(pond_state, &account, 1);
         let food_id = get_last_food_id(pond_state);
         set_food_position_for_test(pond_state, food_id, 25, 26);
         
         let initial_food_count = get_food_count(pond_state);
-        debug::print(&string::utf8(b"initial_food_count:"));
-        debug::print(&initial_food_count);
 
         move_fish(pond_state, &account, fish_id, 0);
         
@@ -794,10 +795,7 @@ module rooch_fish::pond {
         let pond_obj = create_pond(1, 100, 100, 500, 50, 5);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
-        let food_value = 500 / FOOD_VALUE_RATIO;
-        let feed_amount = (10 as u256) * (food_value as u256);
-
-        feed_food(pond_state, &account, feed_amount);
+        feed_food(pond_state, &account, 10);
 
         drop_pond(pond_obj);
     }

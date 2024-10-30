@@ -95,15 +95,15 @@ module rooch_fish::rooch_fish {
         pond::move_fish(pond_state, account, fish_id, direction);
     }
 
-    public entry fun feed_food(account: &signer, game_state_obj: &mut Object<GameState>, pond_id: u64, amount: u256) {
+    public entry fun feed_food(account: &signer, game_state_obj: &mut Object<GameState>, pond_id: u64, count: u64) {
         let game_state = object::borrow_mut(game_state_obj);
         let account_addr = signer::address_of(account);
 
         let pond_obj = table::borrow_mut(&mut game_state.ponds, pond_id);
         let pond_state = object::borrow_mut(pond_obj);
 
-        let actual_amount = pond::feed_food(pond_state, account, amount);
-        player::add_feed(&mut game_state.player_list, account_addr, actual_amount);
+        let actual_cost = pond::feed_food(pond_state, account, count);
+        player::add_feed(&mut game_state.player_list, account_addr, actual_cost);
     }
 
     public entry fun destroy_fish(account: &signer, game_state_obj: &mut Object<GameState>, pond_id: u64, fish_id: u64) {
