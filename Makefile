@@ -22,12 +22,12 @@ publish:
 # 初始化游戏世界
 init-world:
 	@echo "Init RoochFish world..."
-	rooch move run --function  0xf98449f0d0fd7e52ee1a9fa3304f1fb31d133611df4dc3703dab547208254f0::rooch_fish::init_world --json
+	rooch move run --function  0x6d655fbbfa3458f7968c6779fb32233489bd53c13cca5611f56e6d2f0ec76174::rooch_fish::init_world --json
 
 # 测试合约
 debug:
 	@echo "Running tests..."
-	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default economic_system_test
+	rooch move test --path $(PACKAGE_PATH) --skip-fetch-latest-git-deps --ignore_compile_warnings --named-addresses rooch_fish=default pond
 
 # 测试合约
 test:
