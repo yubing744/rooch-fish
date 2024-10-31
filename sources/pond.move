@@ -119,7 +119,7 @@ module rooch_fish::pond {
         let coin = account_coin_store::withdraw(account, pond_state.purchase_amount);
         coin_store::deposit(&mut pond_state.treasury.coin_store, coin);
 
-        let (x, y) = utils::random_position(pond_state.width, pond_state.height);
+        let (x, y) = utils::random_position(0, pond_state.width, pond_state.height);
         let fish_id = pond_state.next_fish_id;
         pond_state.next_fish_id = pond_state.next_fish_id + 1;
         let fish = fish::create_fish(account_addr, fish_id, 10, x, y);
@@ -177,7 +177,7 @@ module rooch_fish::pond {
         // Create food objects
         let i = 0;
         while (i < actual_count) {
-            let (x, y) = utils::random_position(pond_state.width, pond_state.height);
+            let (x, y) = utils::random_position(i * 2, pond_state.width, pond_state.height);
             
             let food_id = pond_state.next_food_id;
             pond_state.next_food_id = pond_state.next_food_id + 1;

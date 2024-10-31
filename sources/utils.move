@@ -1,14 +1,14 @@
 module rooch_fish::utils {
-    use rooch_framework::simple_rng;
+    use rooch_fish::simple_rng;
 
     /// Generate a random position within the given bounds
-    public fun random_position(max_x: u64, max_y: u64): (u64, u64) {
-        (random_u64(max_x), random_u64(max_y))
+    public fun random_position(nonce: u64, max_x: u64, max_y: u64): (u64, u64) {
+        (random_u64(nonce, max_x), random_u64(nonce + 1, max_y))
     }
 
     /// Generate a random u64 number between 0 and max (inclusive)
-    public fun random_u64(max: u64): u64 {
-        simple_rng::rand_u64() % (max + 1)
+    public fun random_u64(nonce: u64, max: u64): u64 {
+        simple_rng::rand_u64_range(nonce, 0, max + 1)
     }
 
     /// Calculate Manhattan distance between two points
@@ -41,13 +41,13 @@ module rooch_fish::utils {
 
     #[test]
     fun test_random_position() {
-        let (x, y) = random_position(100, 100);
+        let (x, y) = random_position(0, 100, 100);
         assert!(x <= 100 && y <= 100, 0);
     }
 
     #[test]
     fun test_random_u64() {
-        let r = random_u64(10);
+        let r = random_u64(0, 10);
         assert!(r <= 10, 0);
     }
 
