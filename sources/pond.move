@@ -311,12 +311,16 @@ module rooch_fish::pond {
         let i = 0;
         while (i < vector::length(&nearby_food)) {
             let food_id = *vector::borrow(&nearby_food, i);
-            let food = get_food(pond_state, food_id);
-            let (food_x, food_y) = food::get_position(food);
-            if (utils::calculate_distance(fish_x, fish_y, food_x, food_y) <= fish_size) {
-                growth_amount = growth_amount + food::get_size(food);
-                vector::push_back(&mut food_ids_to_remove, food_id);
+
+            if (table::contains(&pond_state.foods, food_id)) {
+                let food = get_food(pond_state, food_id);
+                let (food_x, food_y) = food::get_position(food);
+                if (utils::calculate_distance(fish_x, fish_y, food_x, food_y) <= fish_size) {
+                    growth_amount = growth_amount + food::get_size(food);
+                    vector::push_back(&mut food_ids_to_remove, food_id);
+                };
             };
+
             i = i + 1;
         };
 
@@ -339,13 +343,17 @@ module rooch_fish::pond {
         let i = 0;
         while (i < vector::length(&nearby_fish)) {
             let other_fish_id = *vector::borrow(&nearby_fish, i);
-            let other_fish = get_fish(pond_state, other_fish_id);
-            let (other_x, other_y) = fish::get_position(other_fish);
-            let other_size = fish::get_size(other_fish);
-            if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
-                growth_amount = growth_amount + (other_size / 2);
-                vector::push_back(&mut fish_ids_to_remove, other_fish_id);
+
+            if (table::contains(&pond_state.fishes, other_fish_id)) {
+                let other_fish = get_fish(pond_state, other_fish_id);
+                let (other_x, other_y) = fish::get_position(other_fish);
+                let other_size = fish::get_size(other_fish);
+                if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
+                    growth_amount = growth_amount + (other_size / 2);
+                    vector::push_back(&mut fish_ids_to_remove, other_fish_id);
+                };
             };
+
             i = i + 1;
         };
 
