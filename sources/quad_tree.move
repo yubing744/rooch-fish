@@ -216,8 +216,15 @@ module rooch_fish::quad_tree {
         y: u64,
         node_id: u64
     ) {
-        let node = table::borrow_mut(&mut tree.nodes, node_id);
+        let node = table::borrow(&tree.nodes, node_id);
+        // First check if the point is within current node's boundary
+        if (!is_point_in_rectangle(x, y, &node.boundary)) {
+            return
+        };
+
+        // Check if we need to process current node
         if (!node.is_divided) {
+            let node = table::borrow_mut(&mut tree.nodes, node_id);
             let i = 0;
             while (i < vector::length(&node.objects)) {
                 let object_entry = vector::borrow(&node.objects, i);
@@ -230,20 +237,30 @@ module rooch_fish::quad_tree {
             return
         };
 
-        if (x < node.boundary.x + node.boundary.width / 2) {
-            if (y < node.boundary.y + node.boundary.height / 2) {
-                remove_object_recursive(tree, id, object_type, x, y, node.nw);
+        // If node is divided, get quadrant information first
+        let mid_x = node.boundary.x + node.boundary.width / 2;
+        let mid_y = node.boundary.y + node.boundary.height / 2;
+        let nw = node.nw;
+        let ne = node.ne;
+        let sw = node.sw;
+        let se = node.se;
+ 
+        // Search appropriate quadrant
+        if (x < mid_x) {
+            if (y < mid_y) {
+                remove_object_recursive(tree, id, object_type, x, y, nw);
             } else {
-                remove_object_recursive(tree, id, object_type, x, y, node.sw);
+                remove_object_recursive(tree, id, object_type, x, y, sw);
             };
         } else {
-            if (y < node.boundary.y + node.boundary.height / 2) {
-                remove_object_recursive(tree, id, object_type, x, y, node.ne);
+            if (y < mid_y) {
+                remove_object_recursive(tree, id, object_type, x, y, ne);
             } else {
-                remove_object_recursive(tree, id, object_type, x, y, node.se);
+                remove_object_recursive(tree, id, object_type, x, y, se);
             };
         };
     }
+
 
     public fun update_object_position<T: copy + drop + store>(
         tree: &mut QuadTree<T>,
@@ -366,6 +383,24 @@ module rooch_fish::quad_tree {
         assert!(get_object_entry_type(entry) == 2, 2);
         assert!(get_object_entry_x(entry) == 10, 3);
         assert!(get_object_entry_y(entry) == 10, 4);
+
+        drop_quad_tree(tree);
+    }
+
+    #[test]
+    fun test_remove_object_at_boundaries() {
+        let tree = create_quad_tree<u64>(100, 100);
+        
+        // Insert objects at quadrant boundaries
+        insert_object(&mut tree, 1, 1, 50, 50);
+        
+        let result = query_range(&tree, 45, 45, 10, 10);
+        assert!(vector::length(&result) == 1, 0);
+        
+        remove_object(&mut tree, 1, 1, 50, 50);
+        
+        let result = query_range(&tree, 45, 45, 10, 10);
+        assert!(vector::length(&result) == 0, 1);
 
         drop_quad_tree(tree);
     }
