@@ -22,7 +22,7 @@ publish:
 # 初始化游戏世界
 init-world:
 	@echo "Init RoochFish world..."
-	rooch move run --function  0xaed650d98c2f5ab33fd83706dec6b6a0ded4644422a8c71162b1bdd7f10c470::rooch_fish::init_world --json
+	rooch move run --function  0xa705977b6baa5eb91498881f4acf116d1ae4ddcff2cc2d117f71aae01a4a4565::rooch_fish::init_world --json
 
 # 测试合约
 debug:

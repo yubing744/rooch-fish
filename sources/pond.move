@@ -181,7 +181,7 @@ module rooch_fish::pond {
             
             let food_id = pond_state.next_food_id;
             pond_state.next_food_id = pond_state.next_food_id + 1;
-            let food = food::create_food(food_id, 1, x, y);
+            let food = food::create_food(food_id, account_addr, 1, x, y);
             add_food(pond_state, food);
             i = i + 1;
         };

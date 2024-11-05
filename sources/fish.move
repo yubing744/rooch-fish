@@ -1,5 +1,7 @@
 module rooch_fish::fish {
     use moveos_std::signer;
+    use moveos_std::simple_map::{Self, SimpleMap};
+    use std::vector;
 
     friend rooch_fish::rooch_fish;
     friend rooch_fish::pond;
@@ -14,6 +16,8 @@ module rooch_fish::fish {
         size: u64,
         x: u64,
         y: u64,
+        food_contributors: SimpleMap<address, u64>,
+        total_food_consumed: u64,
     }
 
     public(friend) fun create_fish(owner: address, id: u64, size: u64, x: u64, y: u64): Fish {
@@ -23,6 +27,8 @@ module rooch_fish::fish {
             size,
             x,
             y,
+            food_contributors: simple_map::new(),
+            total_food_consumed: 0,
         }
     }
 
@@ -51,8 +57,49 @@ module rooch_fish::fish {
         fish.size = fish.size + amount;
     }
 
+    public(friend) fun record_food_consumption(fish: &mut Fish, food_owner: address, food_size: u64) {
+        let current_amount = if (simple_map::contains_key(&fish.food_contributors, &food_owner)) {
+            *simple_map::borrow(&fish.food_contributors, &food_owner)
+        } else {
+            0
+        };
+        
+        let new_amount = current_amount + food_size;
+        if (current_amount == 0) {
+            simple_map::add(&mut fish.food_contributors, food_owner, new_amount);
+        } else {
+            *simple_map::borrow_mut(&mut fish.food_contributors, &food_owner) = new_amount;
+        };
+        
+        fish.total_food_consumed = fish.total_food_consumed + food_size;
+    }
+
+    public fun get_food_contributors(fish: &Fish): vector<address> {
+        simple_map::keys(&fish.food_contributors)
+    }
+
+    public fun get_contributor_amount(fish: &Fish, owner: address): u64 {
+        if (simple_map::contains_key(&fish.food_contributors, &owner)) {
+            *simple_map::borrow(&fish.food_contributors, &owner)
+        } else {
+            0
+        }
+    }
+
+    public fun get_total_food_consumed(fish: &Fish): u64 {
+        fish.total_food_consumed
+    }
+
     public(friend) fun drop_fish(fish: Fish) {
-        let Fish { id: _, owner: _, size: _, x: _, y: _ } = fish;
+        let Fish { 
+            id: _,
+            owner: _,
+            size: _,
+            x: _,
+            y: _,
+            food_contributors: _,
+            total_food_consumed: _
+        } = fish;
     }
 
     public fun get_fish_info(fish: &Fish): (u64, address, u64, u64, u64) {
@@ -94,73 +141,75 @@ module rooch_fish::fish {
         assert!(size == 10, 3);
         assert!(x == 5, 4);
         assert!(y == 5, 5);
+        assert!(get_total_food_consumed(&fish) == 0, 6);
+        assert!(vector::length(&get_food_contributors(&fish)) == 0, 7);
 
         drop_fish(fish);
     }
 
     #[test(owner = @0x42)]
-    fun test_move_fish_up(owner: signer) {
+    fun test_move_fish(owner: signer) {
         let owner_addr = signer::address_of(&owner);
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
         
-        move_fish(&owner, &mut fish, 0);
-
-        let (_, _, _, new_x, new_y) = get_fish_info(&fish);
-        assert!(new_x == 5, 1);
-        assert!(new_y == 6, 2);
+        // Test all directions
+        move_fish(&owner, &mut fish, 0); // up
+        assert!(get_y(&fish) == 6, 1);
+        
+        move_fish(&owner, &mut fish, 1); // right
+        assert!(get_x(&fish) == 6, 2);
+        
+        move_fish(&owner, &mut fish, 2); // down
+        assert!(get_y(&fish) == 5, 3);
+        
+        move_fish(&owner, &mut fish, 3); // left
+        assert!(get_x(&fish) == 5, 4);
 
         drop_fish(fish);
     }
 
     #[test(owner = @0x42)]
-    fun test_move_fish_right(owner: signer) {
+    fun test_food_contribution(owner: signer) {
         let owner_addr = signer::address_of(&owner);
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
         
-        move_fish(&owner, &mut fish, 1);
+        // Test single contribution
+        let food_owner = @0x101;
+        record_food_consumption(&mut fish, food_owner, 5);
+        assert!(get_contributor_amount(&fish, food_owner) == 5, 1);
+        assert!(get_total_food_consumed(&fish) == 5, 2);
 
-        let (_, _, _, new_x, new_y) = get_fish_info(&fish);
-        assert!(new_x == 6, 1);
-        assert!(new_y == 5, 2);
+        // Test multiple contributions from same owner
+        record_food_consumption(&mut fish, food_owner, 3);
+        assert!(get_contributor_amount(&fish, food_owner) == 8, 3);
+        assert!(get_total_food_consumed(&fish) == 8, 4);
 
         drop_fish(fish);
     }
 
     #[test(owner = @0x42)]
-    fun test_move_fish_down(owner: signer) {
+    fun test_multiple_contributors(owner: signer) {
         let owner_addr = signer::address_of(&owner);
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
         
-        move_fish(&owner, &mut fish, 2);
-
-        let (_, _, _, new_x, new_y) = get_fish_info(&fish);
-        assert!(new_x == 5, 1);
-        assert!(new_y == 4, 2);
-
-        drop_fish(fish);
-    }
-
-    #[test(owner = @0x42)]
-    fun test_move_fish_left(owner: signer) {
-        let owner_addr = signer::address_of(&owner);
-        let fish = create_fish(owner_addr, 1, 10, 5, 5);
+        let food_owner1 = @0x101;
+        let food_owner2 = @0x102;
+        let food_owner3 = @0x103;
         
-        move_fish(&owner, &mut fish, 3);
-
-        let (_, _, _, new_x, new_y) = get_fish_info(&fish);
-        assert!(new_x == 4, 1);
-        assert!(new_y == 5, 2);
-
-        drop_fish(fish);
-    }
-
-    #[test(owner = @0x42, non_owner = @0x43)]
-    #[expected_failure(abort_code = E_NOT_OWNER)]
-    fun test_move_fish_non_owner(owner: signer, non_owner: signer) {
-        let owner_addr = signer::address_of(&owner);
-        let fish = create_fish(owner_addr, 1, 10, 5, 5);
+        record_food_consumption(&mut fish, food_owner1, 5);
+        record_food_consumption(&mut fish, food_owner2, 10);
+        record_food_consumption(&mut fish, food_owner3, 15);
         
-        move_fish(&non_owner, &mut fish, 0);
+        assert!(get_total_food_consumed(&fish) == 30, 1);
+        assert!(get_contributor_amount(&fish, food_owner1) == 5, 2);
+        assert!(get_contributor_amount(&fish, food_owner2) == 10, 3);
+        assert!(get_contributor_amount(&fish, food_owner3) == 15, 4);
+        
+        let contributors = get_food_contributors(&fish);
+        assert!(vector::length(&contributors) == 3, 5);
+        assert!(vector::contains(&contributors, &food_owner1), 6);
+        assert!(vector::contains(&contributors, &food_owner2), 7);
+        assert!(vector::contains(&contributors, &food_owner3), 8);
 
         drop_fish(fish);
     }
@@ -171,37 +220,20 @@ module rooch_fish::fish {
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
         
         grow_fish(&mut fish, 5);
-
-        let (_, _, new_size, _, _) = get_fish_info(&fish);
-        assert!(new_size == 15, 1);
+        assert!(get_size(&fish) == 15, 1);
+        
+        grow_fish(&mut fish, 10);
+        assert!(get_size(&fish) == 25, 2);
 
         drop_fish(fish);
     }
 
-    #[test(owner = @0x42)]
-    fun test_get_fish_info(owner: signer) {
+    #[test(owner = @0x42, non_owner = @0x43)]
+    #[expected_failure(abort_code = E_NOT_OWNER)]
+    fun test_move_fish_non_owner(owner: signer, non_owner: signer) {
         let owner_addr = signer::address_of(&owner);
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
-        
-        let (id, fish_owner, size, x, y) = get_fish_info(&fish);
-
-        assert!(id == 1, 1);
-        assert!(fish_owner == owner_addr, 2);
-        assert!(size == 10, 3);
-        assert!(x == 5, 4);
-        assert!(y == 5, 5);
-
-        drop_fish(fish);
-    }
-
-    #[test(owner = @0x42)]
-    fun test_get_id(owner: signer) {
-        let owner_addr = signer::address_of(&owner);
-        let fish = create_fish(owner_addr, 1, 10, 5, 5);
-        
-        let id = get_id(&fish);
-        assert!(id == 1, 1);
-
+        move_fish(&non_owner, &mut fish, 0);
         drop_fish(fish);
     }
 
@@ -210,8 +242,39 @@ module rooch_fish::fish {
     fun test_move_fish_invalid_direction(owner: signer) {
         let owner_addr = signer::address_of(&owner);
         let fish = create_fish(owner_addr, 1, 10, 5, 5);
-        
         move_fish(&owner, &mut fish, 4);
+        drop_fish(fish);
+    }
+
+    #[test]
+    fun test_non_contributor() {
+        let fish = create_fish(@0x1, 1, 10, 5, 5);
+        let non_contributor = @0x999;
+        
+        assert!(get_contributor_amount(&fish, non_contributor) == 0, 1);
+        assert!(!simple_map::contains_key(&fish.food_contributors, &non_contributor), 2);
+        
+        let contributors = get_food_contributors(&fish);
+        assert!(vector::length(&contributors) == 0, 3);
+        assert!(!vector::contains(&contributors, &non_contributor), 4);
+
+        drop_fish(fish);
+    }
+
+    #[test]
+    fun test_position_getters() {
+        let fish = create_fish(@0x1, 1, 10, 5, 5);
+        
+        assert!(get_x(&fish) == 5, 1);
+        assert!(get_y(&fish) == 5, 2);
+        
+        let (x, y) = get_position(&fish);
+        assert!(x == 5, 3);
+        assert!(y == 5, 4);
+        
+        move_fish_to_for_test(&mut fish, 10, 15);
+        assert!(get_x(&fish) == 10, 5);
+        assert!(get_y(&fish) == 15, 6);
 
         drop_fish(fish);
     }
