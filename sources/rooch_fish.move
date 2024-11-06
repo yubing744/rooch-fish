@@ -13,6 +13,7 @@ module rooch_fish::rooch_fish {
 
     struct PondConfig has copy, drop {
         id: u64,
+        owner: address,
         width: u64,
         height: u64,
         purchase_amount: u256,
@@ -33,22 +34,23 @@ module rooch_fish::rooch_fish {
         let unit = u256::pow(10, gas_coin::decimals() - 3);
 
         let pond_configs = vector[
-            PondConfig { id: 0, width: 100, height: 100, purchase_amount: unit, max_fish_count: 100, max_food_count: 1000 },
-            PondConfig { id: 1, width: 1000, height: 1000, purchase_amount: unit, max_fish_count: 1000, max_food_count: 10000 },
-            PondConfig { id: 2, width: 10000, height: 10000, purchase_amount: unit, max_fish_count: 10000, max_food_count: 100000 },
-            PondConfig { id: 3, width: 100000, height: 100000, purchase_amount: unit, max_fish_count: 100000, max_food_count: 1000000 },
+            PondConfig { id: 0, owner: admin, width: 100, height: 100, purchase_amount: unit, max_fish_count: 100, max_food_count: 1000 },
+            PondConfig { id: 1, owner: admin, width: 1000, height: 1000, purchase_amount: unit, max_fish_count: 1000, max_food_count: 10000 },
+            PondConfig { id: 2, owner: admin, width: 10000, height: 10000, purchase_amount: unit, max_fish_count: 10000, max_food_count: 100000 },
+            PondConfig { id: 3, owner: admin, width: 100000, height: 100000, purchase_amount: unit, max_fish_count: 100000, max_food_count: 1000000 },
 
-            PondConfig { id: 4, width: 1000, height: 1000, purchase_amount: unit * 10, max_fish_count: 1000, max_food_count: 10000 },
-            PondConfig { id: 5, width: 1000, height: 1000, purchase_amount: unit * 100, max_fish_count: 1000, max_food_count: 10000 },
-            PondConfig { id: 6, width: 1000, height: 1000, purchase_amount: unit * 1000, max_fish_count: 1000, max_food_count: 10000 },
-            PondConfig { id: 7, width: 1000, height: 1000, purchase_amount: unit * 10000, max_fish_count: 1000, max_food_count: 10000 },
+            PondConfig { id: 4, owner: admin, width: 1000, height: 1000, purchase_amount: unit * 10, max_fish_count: 1000, max_food_count: 10000 },
+            PondConfig { id: 5, owner: admin, width: 1000, height: 1000, purchase_amount: unit * 100, max_fish_count: 1000, max_food_count: 10000 },
+            PondConfig { id: 6, owner: admin, width: 1000, height: 1000, purchase_amount: unit * 1000, max_fish_count: 1000, max_food_count: 10000 },
+            PondConfig { id: 7, owner: admin, width: 1000, height: 1000, purchase_amount: unit * 10000, max_fish_count: 1000, max_food_count: 10000 },
         ];
 
         let i = 0;
         while (i < vector::length(&pond_configs)) {
             let config = vector::borrow(&pond_configs, i);
             let pond_obj = pond::create_pond(
-                config.id, 
+                config.id,
+                config.owner,
                 config.width, 
                 config.height, 
                 (config.purchase_amount as u256), 

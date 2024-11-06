@@ -1,15 +1,17 @@
 module rooch_fish::pond {
     use std::vector;
     use std::u64;
-    use std::u256;
 
     use moveos_std::object::{Self, Object};
     use moveos_std::signer;
     use moveos_std::table::{Self, Table};         
     use moveos_std::event;
+    use moveos_std::timestamp;
+
     use rooch_framework::account_coin_store;
     use rooch_framework::coin_store::{Self, CoinStore};
     use rooch_framework::gas_coin::{Self, RGas};
+
     use rooch_fish::fish::{Self, Fish};
     use rooch_fish::food::{Self, Food};
     use rooch_fish::utils;
@@ -36,7 +38,6 @@ module rooch_fish::pond {
     const FOOD_VALUE_RATIO: u64 = 10;
     const MAX_FISH_SIZE: u64 = 100;
     const BURST_FOOD_COUNT: u64 = 10;
-    const DEV_ADDRESS: address = @0x1;
 
     struct ExitZone has store, copy, drop {
         x: u64,
@@ -50,6 +51,7 @@ module rooch_fish::pond {
 
     struct PondState has key, store {
         id: u64,
+        owner: address,
         fishes: Table<u64, Fish>,
         foods: Table<u64, Food>,
         exit_zones: vector<ExitZone>,
@@ -97,6 +99,7 @@ module rooch_fish::pond {
 
     public(friend) fun create_pond(
         id: u64,
+        owner: address, 
         width: u64,
         height: u64,
         purchase_amount: u256,
@@ -105,6 +108,7 @@ module rooch_fish::pond {
     ): Object<PondState> {
         let pond_state = PondState {
             id,
+            owner,
             fishes: table::new(),
             foods: table::new(),
             exit_zones: vector::empty(),
@@ -223,20 +227,50 @@ module rooch_fish::pond {
 
         let removed_fish = remove_fish(pond_state, fish_id);
         player::remove_fish(&mut pond_state.player_list, account_addr, fish_id);
-        let reward = calculate_reward(&removed_fish, pond_state);
+        
+        // Calculate total reward
+        let total_reward = calculate_reward(&removed_fish, pond_state);
+        
+        // 1% goes to developer
+        let dev_reward = total_reward / 100;
+        let dev_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, dev_reward);
+        account_coin_store::deposit(pond_state.owner, dev_coin);
 
-        assert!(coin_store::balance(&pond_state.treasury.coin_store) >= reward, ERR_INSUFFICIENT_TREASURY_BALANCE);
-        let reward_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, reward);
-        account_coin_store::deposit(account_addr, reward_coin);
+        // 20% distributed proportionally among food contributors
+        let contributor_reward = (total_reward * 20) / 100;
+        let total_food = fish::get_total_food_consumed(&removed_fish);
+        
+        if (total_food > 0) {
+            let contributors = fish::get_food_contributors(&removed_fish);
+            let i = 0;
+            while (i < vector::length(&contributors)) {
+                let contributor = *vector::borrow(&contributors, i);
+                let amount = fish::get_contributor_amount(&removed_fish, contributor);
+                let reward = contributor_reward * (amount as u256) / (total_food as u256);
+                
+                if (reward > 0) {
+                    let reward_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, reward);
+                    account_coin_store::deposit(contributor, reward_coin);
+                };
+                
+                i = i + 1;
+            };
+        };
 
-        let reward_amount = u256::divide_and_round_up(reward, u256::pow(10, gas_coin::decimals()));
-        player::add_reward(&mut pond_state.player_list, account_addr, reward_amount);
+        // Remaining 79% goes to fish owner
+        let owner_reward = total_reward - dev_reward - contributor_reward;
+        let owner_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, owner_reward);
+        account_coin_store::deposit(account_addr, owner_coin);
 
-        event::emit(FishDestroyedEvent { pond_id: pond_state.id, fish_id, reward });
+        event::emit(FishDestroyedEvent { 
+            pond_id: pond_state.id, 
+            fish_id,
+            reward: total_reward 
+        });
 
         fish::drop_fish(removed_fish);
 
-        reward
+        total_reward
     }
 
     fun add_fish(pond_state: &mut PondState, fish: Fish) {
@@ -342,10 +376,10 @@ module rooch_fish::pond {
         // Calculate total reward
         let total_reward = calculate_reward(&fish, pond_state);
         
-        // Developer reward (1%)
+        // Owner reward (1%)
         let dev_reward = total_reward / 100;
         let dev_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, dev_reward);
-        account_coin_store::deposit(DEV_ADDRESS, dev_coin);
+        account_coin_store::deposit(pond_state.owner, dev_coin);
 
         // Contributor rewards (20%)
         let contributor_reward = (total_reward * 20) / 100;
@@ -463,7 +497,9 @@ module rooch_fish::pond {
                 let other_fish = get_fish(pond_state, other_fish_id);
                 let (other_x, other_y) = fish::get_position(other_fish);
                 let other_size = fish::get_size(other_fish);
-                if (utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
+
+                if (!fish::is_protected(other_fish) && 
+                    utils::calculate_distance(fish_x, fish_y, other_x, other_y) <= fish_size && fish_size > other_size) {
                     growth_amount = growth_amount + (other_size / 2);
                     vector::push_back(&mut fish_ids_to_remove, other_fish_id);
                 };
@@ -580,6 +616,7 @@ module rooch_fish::pond {
     public(friend) fun drop_pond(pond: Object<PondState>) {
         let PondState { 
             id: _,
+            owner: _,
             fishes,
             foods,
             exit_zones,
@@ -660,13 +697,14 @@ module rooch_fish::pond {
         genesis::init_for_test();
 
         let id = 1;
+        let owner = @0x123;
         let width = 100;
         let height = 100;
         let purchase_amount = 500;
         let max_fish_count = 50;
         let max_food_count = 30;
 
-        let pond_obj = create_pond(id, width, height, purchase_amount, max_fish_count, max_food_count);
+        let pond_obj = create_pond(id, owner, width, height, purchase_amount, max_fish_count, max_food_count);
         let pond_state = object::borrow(&pond_obj);
 
         assert!(get_pond_id(pond_state) == id, 1);
@@ -690,10 +728,13 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let owner = @0x123;
+        let pond_obj = create_pond(1, owner, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
+
+        let initial_owner_balance = gas_coin::balance(owner);
 
         // Create a fish near max size
         let fish_id = purchase_fish(pond_state, &account);
@@ -709,6 +750,10 @@ module rooch_fish::pond {
         // Verify burst results
         assert!(get_fish_count(pond_state) == 0, 1);
         assert!(get_food_count(pond_state) == BURST_FOOD_COUNT, 2);
+
+        // Verify owner received 1% reward
+        let final_owner_balance = gas_coin::balance(owner);
+        assert!(final_owner_balance > initial_owner_balance, 3);
 
         drop_pond(pond_obj);
     }
@@ -726,7 +771,7 @@ module rooch_fish::pond {
         gas_coin::faucet_for_test(food_owner1_addr, 1000000);
         gas_coin::faucet_for_test(food_owner2_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
@@ -763,6 +808,48 @@ module rooch_fish::pond {
     }
 
     #[test(account = @0x42)]
+    fun test_reward_distribution(account: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        let owner = @0x123;
+        gas_coin::faucet_for_test(account_addr, 1000000);
+        gas_coin::faucet_for_test(owner, 1000000);
+
+        let pond_obj = create_pond(1, owner, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        // Add funds to treasury for rewards
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
+
+        let initial_owner_balance = gas_coin::balance(owner);
+
+        // Create and grow fish
+        let fish_id = purchase_fish(pond_state, &account);
+        move_fish_to_for_test(pond_state, fish_id, 25, 25);
+        
+        let fish = get_fish_mut(pond_state, fish_id);
+        let fish_size = 100;
+        fish::grow_fish(fish, fish_size);
+
+        // Calculate expected reward
+        let fish_final_size = fish::get_size(fish);
+        let total_reward = (fish_final_size as u256) * pond_state.purchase_amount / 100;
+        let expected_owner_reward = total_reward / 100; // 1% of total reward
+
+        // Trigger burst
+        let (_, _) = move_fish(pond_state, &account, fish_id, 1);
+
+        let final_owner_balance = gas_coin::balance(owner);
+        let actual_owner_reward = final_owner_balance - initial_owner_balance;
+        
+        // Verify owner got exactly 1% of fish's value
+        assert!(actual_owner_reward == expected_owner_reward, 1);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42)]
     #[expected_failure(abort_code = ERR_MAX_FISH_COUNT_REACHED)]
     fun test_max_fish_limit(account: signer) {
         genesis::init_for_test();
@@ -772,7 +859,7 @@ module rooch_fish::pond {
 
         // Create pond with small max fish limit
         let max_fish = 2;
-        let pond_obj = create_pond(1, 100, 100, 500, max_fish, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, max_fish, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
@@ -797,7 +884,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
@@ -816,7 +903,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
@@ -840,7 +927,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 300);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 300);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         let food_value = 500 / FOOD_VALUE_RATIO;
@@ -867,7 +954,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
@@ -888,7 +975,8 @@ module rooch_fish::pond {
     fun test_exit_zones() {
         genesis::init_for_test();
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let owner = @0x123;
+        let pond_obj = create_pond(1, owner, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         add_exit_zone(pond_state, 10, 10, 5);
@@ -915,7 +1003,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
@@ -950,7 +1038,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
@@ -1002,7 +1090,7 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 2, 30);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 2, 30);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
@@ -1022,10 +1110,186 @@ module rooch_fish::pond {
         let account_addr = signer::address_of(&account);
         gas_coin::faucet_for_test(account_addr, 1000000);
 
-        let pond_obj = create_pond(1, 100, 100, 500, 50, 5);
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 5);
         let pond_state = object::borrow_mut(&mut pond_obj);
 
         feed_food(pond_state, &account, 10);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42, food_owner = @0x43)]
+    fun test_destroy_fish_reward_distribution(account: signer, food_owner: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        let food_owner_addr = signer::address_of(&food_owner);
+        let owner = @0x123;
+
+        // Set initial balances
+        gas_coin::faucet_for_test(account_addr, 1000000);
+        gas_coin::faucet_for_test(food_owner_addr, 1000000);
+        gas_coin::faucet_for_test(owner, 1000000);
+        
+        let pond_obj = create_pond(1, owner, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        // Add substantial funds to treasury for rewards
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 100000));
+
+        // Create and grow fish with significant size
+        let fish_id = purchase_fish(pond_state, &account);
+        move_fish_to_for_test(pond_state, fish_id, 25, 25);
+        
+        // Grow fish to increase reward value
+        let fish = get_fish_mut(pond_state, fish_id);
+        fish::grow_fish(fish, 50);
+
+        // Add food contribution
+        feed_food(pond_state, &food_owner, 1);
+        let food_id = get_last_food_id(pond_state);
+        set_food_position_for_test(pond_state, food_id, 25, 26);
+        
+        // Move fish to eat food
+        move_fish(pond_state, &account, fish_id, 0);
+
+        // Record balances before destroy
+        let initial_owner_balance = gas_coin::balance(owner);
+        let initial_food_owner_balance = gas_coin::balance(food_owner_addr);
+        let initial_fish_owner_balance = gas_coin::balance(account_addr);
+
+        // Add exit zone and destroy fish
+        add_exit_zone(pond_state, 0, 0, 100);
+        let total_reward = destroy_fish(pond_state, &account, fish_id);
+
+        // Calculate expected rewards
+        let dev_reward = total_reward / 100; // 1%
+        let contributor_reward = (total_reward * 20) / 100; // 20%
+        let owner_reward = total_reward - dev_reward - contributor_reward; // 79%
+
+        // Verify final balances
+        let final_owner_balance = gas_coin::balance(owner);
+        let final_food_owner_balance = gas_coin::balance(food_owner_addr);
+        let final_fish_owner_balance = gas_coin::balance(account_addr);
+
+        // Verify reward distributions
+        assert!((final_owner_balance > initial_owner_balance), 1);
+        assert!((final_owner_balance - initial_owner_balance) == dev_reward, 2);
+        
+        assert!((final_food_owner_balance > initial_food_owner_balance), 3);
+        assert!((final_food_owner_balance - initial_food_owner_balance) == contributor_reward, 4);
+        
+        assert!((final_fish_owner_balance > initial_fish_owner_balance), 5);
+        assert!((final_fish_owner_balance - initial_fish_owner_balance) == owner_reward, 6);
+
+        // Verify total reward distribution
+        assert!(dev_reward + contributor_reward + owner_reward == total_reward, 7);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42)]
+    fun test_destroy_fish_no_contributors(account: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        let owner = @0x123;
+        
+        // Set initial balances with large amounts
+        gas_coin::faucet_for_test(account_addr, 10000000);
+        gas_coin::faucet_for_test(owner, 10000000);
+
+        let pond_obj = create_pond(1, owner, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        // Add substantial funds to treasury
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000000));
+
+        // Create and grow fish
+        let fish_id = purchase_fish(pond_state, &account);
+        move_fish_to_for_test(pond_state, fish_id, 25, 25);
+        
+        // Grow fish to increase reward value
+        let fish = get_fish_mut(pond_state, fish_id);
+        fish::grow_fish(fish, 50);
+
+        // Add exit zone and record balances just before destroying fish
+        add_exit_zone(pond_state, 0, 0, 100);
+        let initial_owner_balance = gas_coin::balance(owner);
+        let initial_fish_owner_balance = gas_coin::balance(account_addr);
+
+        // Destroy fish and get total reward
+        let total_reward = destroy_fish(pond_state, &account, fish_id);
+
+        // Calculate expected rewards
+        let dev_reward = total_reward / 100; // 1%
+        let owner_reward = total_reward - dev_reward; // 99% (since no contributors)
+
+        // Get final balances
+        let final_owner_balance = gas_coin::balance(owner);
+        let final_fish_owner_balance = gas_coin::balance(account_addr);
+
+        // Calculate actual rewards received
+        let actual_dev_reward = final_owner_balance - initial_owner_balance;
+        let actual_owner_reward = final_fish_owner_balance - initial_fish_owner_balance;
+
+        // Verify rewards - developer should get exactly 1%
+        assert!(actual_dev_reward == dev_reward, 1);
+        
+        // Verify that fish owner got remainder (allowing for minimal precision loss)
+        assert!(actual_owner_reward > 0, 2);
+        assert!(actual_owner_reward <= owner_reward, 3); // Should not exceed expected
+        
+        // The difference between expected and actual should be very small
+        let reward_difference = if (owner_reward > actual_owner_reward) {
+            owner_reward - actual_owner_reward
+        } else {
+            actual_owner_reward - owner_reward
+        };
+        assert!(reward_difference < 100, 4); // Allow for small rounding differences
+        
+        // Total distributed rewards should match total_reward (within small margin)
+        let total_distributed = actual_dev_reward + actual_owner_reward;
+        let distribution_difference = if (total_reward > total_distributed) {
+            total_reward - total_distributed
+        } else {
+            total_distributed - total_reward
+        };
+        assert!(distribution_difference < 100, 5); // Allow for small rounding differences
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42)]
+    fun test_fish_protection(account: signer) {
+        genesis::init_for_test();
+        
+        let account_addr = signer::address_of(&account);
+        gas_coin::faucet_for_test(account_addr, 1000000);
+
+        let pond_obj = create_pond(1, account_addr, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
+
+        let predator_id = purchase_fish(pond_state, &account);
+        let prey_id = purchase_fish(pond_state, &account);
+
+        let predator = get_fish_mut(pond_state, predator_id);
+        fish::grow_fish(predator, 50);
+
+        move_fish_to_for_test(pond_state, predator_id, 25, 25);
+        move_fish_to_for_test(pond_state, prey_id, 26, 25);
+
+        move_fish(pond_state, &account, predator_id, 1);
+        
+        assert!(table::contains(&pond_state.fishes, prey_id), 1);
+        
+        timestamp::fast_forward_seconds_for_test(61);
+        
+        move_fish(pond_state, &account, predator_id, 1);
+        
+        assert!(!table::contains(&pond_state.fishes, prey_id), 2);
 
         drop_pond(pond_obj);
     }

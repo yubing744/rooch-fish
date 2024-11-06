@@ -1,5 +1,6 @@
 module rooch_fish::fish {
     use moveos_std::signer;
+    use moveos_std::timestamp;
     use moveos_std::simple_map::{Self, SimpleMap};
     use std::vector;
 
@@ -18,6 +19,7 @@ module rooch_fish::fish {
         y: u64,
         food_contributors: SimpleMap<address, u64>,
         total_food_consumed: u64,
+        created_at: u64,
     }
 
     public(friend) fun create_fish(owner: address, id: u64, size: u64, x: u64, y: u64): Fish {
@@ -29,6 +31,7 @@ module rooch_fish::fish {
             y,
             food_contributors: simple_map::new(),
             total_food_consumed: 0,
+            created_at: timestamp::now_milliseconds(),
         }
     }
 
@@ -90,6 +93,16 @@ module rooch_fish::fish {
         fish.total_food_consumed
     }
 
+    public fun is_protected(fish: &Fish): bool {
+        let protection_period = 60000; // 1 minute in milliseconds
+        let current_time = timestamp::now_milliseconds();
+        current_time - fish.created_at < protection_period
+    }
+
+    public fun get_created_at(fish: &Fish): u64 {
+        fish.created_at
+    }
+
     public(friend) fun drop_fish(fish: Fish) {
         let Fish { 
             id: _,
@@ -98,7 +111,8 @@ module rooch_fish::fish {
             x: _,
             y: _,
             food_contributors: _,
-            total_food_consumed: _
+            total_food_consumed: _,
+            created_at: _,
         } = fish;
     }
 

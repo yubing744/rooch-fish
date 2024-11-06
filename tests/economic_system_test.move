@@ -65,6 +65,7 @@ module rooch_fish::economic_system_test {
         // Test fish growth and reward
         let food_id = rooch_fish::get_last_food_id(game_state_obj, POND_ID_SMALL);
         rooch_fish::set_food_position_for_test(game_state_obj, POND_ID_SMALL, food_id, 26, 25);
+        rooch_fish::set_fish_position_for_test(game_state_obj, POND_ID_SMALL, fish1_small, 25, 25);
         rooch_fish::move_fish(&player1, game_state_obj, POND_ID_SMALL, fish1_small, 1);
 
         rooch_fish::set_fish_position_for_test(game_state_obj, POND_ID_SMALL, fish1_small, 50, 50);
