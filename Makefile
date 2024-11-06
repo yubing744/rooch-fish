@@ -22,7 +22,15 @@ publish:
 # 初始化游戏世界
 init-world:
 	@echo "Init RoochFish world..."
-	rooch move run --function  0xa705977b6baa5eb91498881f4acf116d1ae4ddcff2cc2d117f71aae01a4a4565::rooch_fish::init_world --json
+	rooch move run --function  0xcda5dc99a8135dfba1e179771a3be156271437cad279a30735d5ff3577e5c488::rooch_fish::init_world --json
+
+# 查看游戏世界
+view-world:
+	rooch state --access-path /object/0xcda5dc99a8135dfba1e179771a3be156271437cad279a30735d5ff3577e5c488::rooch_fish::GameState
+
+# 查看游戏世界
+view-ponds:
+	rooch rpc request --method rooch_listFieldStates --params '["0x80bb87452291ece3419dac1cd716e8638127ac9bdf3906e03e4cbb7a412ff7d6", null, "8", {"decode": true, "showDisplay": false}]' --json
 
 # 测试合约
 debug:
