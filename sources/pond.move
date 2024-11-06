@@ -34,6 +34,9 @@ module rooch_fish::pond {
 
     const MAX_FOOD_PER_FEED: u64 = 20; 
     const FOOD_VALUE_RATIO: u64 = 10;
+    const MAX_FISH_SIZE: u64 = 100;
+    const BURST_FOOD_COUNT: u64 = 10;
+    const DEV_ADDRESS: address = @0x1;
 
     struct ExitZone has store, copy, drop {
         x: u64,
@@ -62,6 +65,15 @@ module rooch_fish::pond {
         max_food_count: u64,
         treasury: Treasury,
         player_list: PlayerList,
+    }
+
+    struct BurstEvent has copy, drop, store {
+        pond_id: u64,
+        fish_id: u64,
+        owner: address,
+        size: u64,
+        food_count: u64,
+        total_reward: u256
     }
 
     struct FishPurchasedEvent has copy, drop, store {
@@ -134,7 +146,6 @@ module rooch_fish::pond {
 
     public(friend) fun move_fish(pond_state: &mut PondState, account: &signer, fish_id: u64, direction: u8): (u64, u64) {
         let account_addr = signer::address_of(account);
-
         let fish = get_fish_mut(pond_state, fish_id);
         assert!(fish::get_owner(fish) == account_addr, ERR_UNAUTHORIZED);
 
@@ -144,16 +155,25 @@ module rooch_fish::pond {
         let (new_x, new_y) = fish::get_position(fish);
         assert!(new_x < pond_state.width && new_y < pond_state.height, ERR_FISH_OUT_OF_BOUNDS);
 
-        let new_x = utils::clamp(new_x, 0, pond_state.width);
-        let new_y = utils::clamp(new_y, 0, pond_state.height);
+        // Update position in quad tree
+        quad_tree::update_object_position(
+            &mut pond_state.quad_tree, 
+            fish_id,
+            OBJECT_TYPE_FISH,
+            old_x,
+            old_y,
+            new_x,
+            new_y
+        );
 
-        quad_tree::update_object_position(&mut pond_state.quad_tree, fish_id, OBJECT_TYPE_FISH, old_x, old_y, new_x, new_y);
+        handle_collisions(pond_state, fish_id);
 
-        if (new_x != old_x || new_y != old_y) {
-            handle_collisions(pond_state, fish_id);
-        };
-
-        event::emit(FishMovedEvent { pond_id: pond_state.id, fish_id, new_x, new_y });
+        event::emit(FishMovedEvent { 
+            pond_id: pond_state.id,
+            fish_id,
+            new_x,
+            new_y
+        });
 
         (new_x, new_y)
     }
@@ -178,11 +198,15 @@ module rooch_fish::pond {
         let i = 0;
         while (i < actual_count) {
             let (x, y) = utils::random_position(i * 2, pond_state.width, pond_state.height);
-            
-            let food_id = pond_state.next_food_id;
-            pond_state.next_food_id = pond_state.next_food_id + 1;
-            let food = food::create_food(food_id, account_addr, 1, x, y);
+            let food = food::create_food(
+                pond_state.next_food_id,
+                account_addr,
+                1,
+                x,
+                y
+            );
             add_food(pond_state, food);
+            pond_state.next_food_id = pond_state.next_food_id + 1;
             i = i + 1;
         };
 
@@ -276,6 +300,11 @@ module rooch_fish::pond {
         let fish_size = fish::get_size(fish);
         let (fish_x, fish_y) = fish::get_position(fish);
 
+        if (fish_size >= MAX_FISH_SIZE) {
+            process_burst(pond_state, fish_id);
+            return
+        };
+
         let query_range = fish_size * 2;
         let nearby_objects = quad_tree::query_range(
             &pond_state.quad_tree,
@@ -304,10 +333,82 @@ module rooch_fish::pond {
         handle_fish_collisions(pond_state, fish_id, fish_size, fish_x, fish_y, nearby_fish);
     }
 
+
+    fun process_burst(pond_state: &mut PondState, fish_id: u64) {
+        let fish = remove_fish(pond_state, fish_id);
+        let owner = fish::get_owner(&fish);
+        let size = fish::get_size(&fish);
+
+        // Calculate total reward
+        let total_reward = calculate_reward(&fish, pond_state);
+        
+        // Developer reward (1%)
+        let dev_reward = total_reward / 100;
+        let dev_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, dev_reward);
+        account_coin_store::deposit(DEV_ADDRESS, dev_coin);
+
+        // Contributor rewards (20%)
+        let contributor_reward = (total_reward * 20) / 100;
+        let total_food = fish::get_total_food_consumed(&fish);
+        
+        if (total_food > 0) {
+            let contributors = fish::get_food_contributors(&fish);
+            let i = 0;
+            while (i < vector::length(&contributors)) {
+                let contributor = *vector::borrow(&contributors, i);
+                let amount = fish::get_contributor_amount(&fish, contributor);
+                let reward = contributor_reward * (amount as u256) / (total_food as u256);
+                
+                if (reward > 0) {
+                    let reward_coin = coin_store::withdraw(&mut pond_state.treasury.coin_store, reward);
+                    account_coin_store::deposit(contributor, reward_coin);
+                };
+                
+                i = i + 1;
+            };
+        };
+
+        // Generate burst food
+        let food_size = size / BURST_FOOD_COUNT;
+        let i = 0;
+        while (i < BURST_FOOD_COUNT) {
+            let (x, y) = utils::random_position(
+                pond_state.next_food_id + i,
+                pond_state.width,
+                pond_state.height
+            );
+            
+            let food = food::create_food(
+                pond_state.next_food_id,
+                owner,  // Set burst fish owner as food owner
+                food_size,
+                x,
+                y
+            );
+            add_food(pond_state, food);
+            pond_state.next_food_id = pond_state.next_food_id + 1;
+            i = i + 1;
+        };
+
+        event::emit(BurstEvent {
+            pond_id: pond_state.id,
+            fish_id,
+            owner,
+            size,
+            food_count: BURST_FOOD_COUNT,
+            total_reward
+        });
+
+        fish::drop_fish(fish);
+    }
+
     fun handle_food_collisions(pond_state: &mut PondState, fish_id: u64, fish_size: u64, fish_x: u64, fish_y: u64, nearby_food: vector<u64>) {
         let growth_amount = 0u64;
         let food_ids_to_remove = vector::empty<u64>();
+        let food_owners = vector::empty<address>();
+        let food_sizes = vector::empty<u64>();
 
+        // First pass: collect all foods to be eaten and their info
         let i = 0;
         while (i < vector::length(&nearby_food)) {
             let food_id = *vector::borrow(&nearby_food, i);
@@ -318,21 +419,35 @@ module rooch_fish::pond {
                 if (utils::calculate_distance(fish_x, fish_y, food_x, food_y) <= fish_size) {
                     growth_amount = growth_amount + food::get_size(food);
                     vector::push_back(&mut food_ids_to_remove, food_id);
+                    vector::push_back(&mut food_owners, food::get_owner(food));
+                    vector::push_back(&mut food_sizes, food::get_size(food));
                 };
             };
 
             i = i + 1;
         };
 
+        // Second pass: update fish
         let fish_mut = get_fish_mut(pond_state, fish_id);
         fish::grow_fish(fish_mut, growth_amount);
 
         let j = 0;
-        while (j < vector::length(&food_ids_to_remove)) {
-            let food_id = *vector::borrow(&food_ids_to_remove, j);
-            let food_obj = remove_food(pond_state, food_id);
-            food::drop_food(food_obj);
+        while (j < vector::length(&food_owners)) {
+            let food_owner = *vector::borrow(&food_owners, j);
+            let food_size = *vector::borrow(&food_sizes, j);
+        
+            fish::record_food_consumption(fish_mut, food_owner, food_size);
             j = j + 1;
+        };
+
+        // Third pass: remove foods
+        let k = 0;
+        while (k < vector::length(&food_ids_to_remove)) {
+            let food_id = *vector::borrow(&food_ids_to_remove, k);
+            let food = remove_food(pond_state, food_id);
+            food::drop_food(food);
+            
+            k = k + 1;
         };
     }
 
@@ -564,6 +679,113 @@ module rooch_fish::pond {
         assert!(get_food_count(pond_state) == 0, 8);
         assert!(get_player_count(pond_state) == 0, 9);
         assert!(get_total_feed(pond_state) == 0, 10);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42)]
+    fun test_fish_burst_mechanism(account: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        gas_coin::faucet_for_test(account_addr, 1000000);
+
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 1000));
+
+        // Create a fish near max size
+        let fish_id = purchase_fish(pond_state, &account);
+        move_fish_to_for_test(pond_state, fish_id, 25, 25);
+        
+        // Grow fish to near burst size
+        let fish = get_fish_mut(pond_state, fish_id);
+        fish::grow_fish(fish, MAX_FISH_SIZE - 5);
+
+        // Move fish to trigger burst
+        let (_, _) = move_fish(pond_state, &account, fish_id, 1);
+        
+        // Verify burst results
+        assert!(get_fish_count(pond_state) == 0, 1);
+        assert!(get_food_count(pond_state) == BURST_FOOD_COUNT, 2);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42, food_owner1 = @0x43, food_owner2 = @0x44)]
+    fun test_food_contribution_tracking(account: signer, food_owner1: signer, food_owner2: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        let food_owner1_addr = signer::address_of(&food_owner1);
+        let food_owner2_addr = signer::address_of(&food_owner2);
+        
+        // Set up accounts with gas
+        gas_coin::faucet_for_test(account_addr, 1000000);
+        gas_coin::faucet_for_test(food_owner1_addr, 1000000);
+        gas_coin::faucet_for_test(food_owner2_addr, 1000000);
+
+        let pond_obj = create_pond(1, 100, 100, 500, 50, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
+
+        // Create fish
+        let fish_id = purchase_fish(pond_state, &account);
+        move_fish_to_for_test(pond_state, fish_id, 25, 25);
+
+        // Place food from different owners
+        feed_food(pond_state, &food_owner1, 1);
+        feed_food(pond_state, &food_owner2, 1);
+        
+        let food_id1 = get_last_food_id(pond_state) - 1;
+        let food_id2 = get_last_food_id(pond_state);
+        
+        // Position foods near fish
+        set_food_position_for_test(pond_state, food_id1, 26, 25);
+        set_food_position_for_test(pond_state, food_id2, 27, 25);
+
+        // Move fish to eat both foods
+        move_fish(pond_state, &account, fish_id, 1);
+        move_fish(pond_state, &account, fish_id, 1);
+
+        // Verify food contributions
+        let fish = get_fish(pond_state, fish_id);
+        assert!(fish::get_contributor_amount(fish, food_owner1_addr) > 0, 1);
+        assert!(fish::get_contributor_amount(fish, food_owner2_addr) > 0, 2);
+        assert!(fish::get_total_food_consumed(fish) > 0, 3);
+        
+        // Verify food was consumed
+        assert!(get_food_count(pond_state) == 0, 4);
+
+        drop_pond(pond_obj);
+    }
+
+    #[test(account = @0x42)]
+    #[expected_failure(abort_code = ERR_MAX_FISH_COUNT_REACHED)]
+    fun test_max_fish_limit(account: signer) {
+        genesis::init_for_test();
+
+        let account_addr = signer::address_of(&account);
+        gas_coin::faucet_for_test(account_addr, 1000000);
+
+        // Create pond with small max fish limit
+        let max_fish = 2;
+        let pond_obj = create_pond(1, 100, 100, 500, max_fish, 30);
+        let pond_state = object::borrow_mut(&mut pond_obj);
+
+        coin_store::deposit(&mut pond_state.treasury.coin_store, account_coin_store::withdraw(&account, 10000));
+
+        // Purchase fish until we hit the limit
+        purchase_fish(pond_state, &account);
+        assert!(get_fish_count(pond_state) == 1, 1);
+        
+        purchase_fish(pond_state, &account);
+        assert!(get_fish_count(pond_state) == 2, 2);
+
+        // This should fail as we've reached the max fish limit
+        purchase_fish(pond_state, &account);
 
         drop_pond(pond_obj);
     }
@@ -808,4 +1030,3 @@ module rooch_fish::pond {
         drop_pond(pond_obj);
     }
 }
-
