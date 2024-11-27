@@ -22,15 +22,27 @@ publish:
 # 初始化游戏世界
 init-world:
 	@echo "Init RoochFish world..."
-	rooch move run --function  0xcda5dc99a8135dfba1e179771a3be156271437cad279a30735d5ff3577e5c488::rooch_fish::init_world --json
+	rooch move run --function  0x24840092564334fb3f5c63a864ff9c13bbdafaab906f48ee7178f26a3dc8554b::rooch_fish::init_world --json
 
 # 查看游戏世界
 view-world:
-	rooch state --access-path /object/0xcda5dc99a8135dfba1e179771a3be156271437cad279a30735d5ff3577e5c488::rooch_fish::GameState
+	rooch state --access-path /object/0x24840092564334fb3f5c63a864ff9c13bbdafaab906f48ee7178f26a3dc8554b::rooch_fish::GameState
 
 # 查看游戏世界
 view-ponds:
-	rooch rpc request --method rooch_listFieldStates --params '["0x80bb87452291ece3419dac1cd716e8638127ac9bdf3906e03e4cbb7a412ff7d6", null, "8", {"decode": true, "showDisplay": false}]' --json
+	rooch rpc request --method rooch_listFieldStates --params '["0x48954635d648a30c92751ebff4a6ee54bd8edfa3a97e7103c75f5cfd199c27a7", null, "8", {"decode": true, "showDisplay": true}]' --json
+
+# 购买鱼
+purchase_fish:
+	rooch move run --function  0x24840092564334fb3f5c63a864ff9c13bbdafaab906f48ee7178f26a3dc8554b::rooch_fish::purchase_fish --args object_id:0x5e89df84a672ea3697916f3a2a2ada4c63586db573b2e8af666da7d2b1084fd6 --args u64:0 --json
+
+# 查看购买的鱼ID
+view_fish_ids:
+	rooch move view --function 0x24840092564334fb3f5c63a864ff9c13bbdafaab906f48ee7178f26a3dc8554b::rooch_fish::get_pond_player_fish_ids --args object_id:0x5e89df84a672ea3697916f3a2a2ada4c63586db573b2e8af666da7d2b1084fd6 --args 0u64 --args 'address:default'
+
+# 移动鱼
+move_fish:
+	rooch move run --function  0x24840092564334fb3f5c63a864ff9c13bbdafaab906f48ee7178f26a3dc8554b::rooch_fish::move_fish --args object_id:0x5e89df84a672ea3697916f3a2a2ada4c63586db573b2e8af666da7d2b1084fd6 --args u64:0 --args u64:5 --args u8:0 --json --gas-profile
 
 # 测试合约
 debug:
